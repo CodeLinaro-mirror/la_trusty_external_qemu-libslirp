@@ -238,8 +238,9 @@ int translate_dnssearch(Slirp *s, const char **names)
     size_t i, num_domains, memreq = 0;
     uint8_t *result = NULL, *outptr;
     CompactDomain *domains = NULL;
-
-    num_domains = g_strv_length((GStrv)(void *)names);
+    /* TODO(wdu@) b/255961329: Revert to GStrv once the prebuilt glib-2 library has been
+     * updated */
+    num_domains = g_strv_length((gchar**)(void *)names);
     if (num_domains == 0) {
         return -2;
     }
