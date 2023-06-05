@@ -27,7 +27,29 @@ void slirp_remque(void *a)
     element->qh_rlink = NULL;
 }
 
-/* TODO: IPv6 */
+struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
+                               void *opaque, struct in6_addr *addr, int port)
+{
+    struct gfwd_list *f = g_new0(struct gfwd_list, 1);
+    char addrstr[INET6_ADDRSTRLEN];
+
+    DEBUG_CALL("add_guestxfwd");
+    DEBUG_ARG("port = %d", port);
+
+    inet_ntop(AF_INET6, addr, addrstr, INET6_ADDRSTRLEN);
+
+    DEBUG_ARG("addr = %s", addrstr);
+
+    f->write_cb = write_cb;
+    f->opaque = opaque;
+    f->ex_fport = port;
+    f->ex_addr6 = *addr;
+    f->ex_next = *ex_ptr;
+    *ex_ptr = f;
+
+    return f;
+}
+
 struct gfwd_list *add_guestfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
                                void *opaque, struct in_addr addr, int port)
 {
@@ -61,6 +83,20 @@ struct gfwd_list *add_unix(struct gfwd_list **ex_ptr, const char *unixsock,
     f->ex_unix = g_strdup(unixsock);
 
     return f;
+}
+
+int remove_guestxfwd(struct gfwd_list **ex_ptr, struct in6_addr *addr, int port)
+{
+    for (; *ex_ptr != NULL; ex_ptr = &((*ex_ptr)->ex_next)) {
+        struct gfwd_list *f = *ex_ptr;
+        if (in6_equal(&f->ex_addr6, addr) && f->ex_fport == port) {
+            *ex_ptr = f->ex_next;
+            g_free(f->ex_exec);
+            g_free(f);
+            return 0;
+        }
+    }
+    return -1;
 }
 
 int remove_guestfwd(struct gfwd_list **ex_ptr, struct in_addr addr, int port)

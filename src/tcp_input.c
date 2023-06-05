@@ -38,6 +38,7 @@
 
 #include "slirp.h"
 #include "ip_icmp.h"
+#include "ip6.h"
 
 #define TCPREXMTTHRESH 3
 
@@ -379,7 +380,6 @@ findso:
      * as if it was LISTENING, and continue...
      */
     if (so == NULL) {
-        /* TODO: IPv6 */
         if (slirp->restricted) {
             /* Any hostfwds will have an existing socket, so we only get here
              * for non-hostfwd connections. These should be dropped, unless it
@@ -388,7 +388,8 @@ findso:
             for (ex_ptr = slirp->guestfwd_list; ex_ptr;
                  ex_ptr = ex_ptr->ex_next) {
                 if (ex_ptr->ex_fport == ti->ti_dport &&
-                    ti->ti_dst.s_addr == ex_ptr->ex_addr.s_addr) {
+                    (af == AF_INET6 ? in6_equal(&ti->ti_dst6, &ex_ptr->ex_addr6) :
+                    ti->ti_dst.s_addr == ex_ptr->ex_addr.s_addr)) {
                     break;
                 }
             }
@@ -596,7 +597,6 @@ findso:
          * If this is destined for the control address, then flag to
          * tcp_ctl once connected, otherwise connect
          */
-        /* TODO: IPv6 */
         if (af == AF_INET &&
             (so->so_faddr.s_addr & slirp->vnetwork_mask.s_addr) ==
                 slirp->vnetwork_addr.s_addr) {
@@ -611,6 +611,23 @@ findso:
                         break;
                     }
                 }
+                if (so->so_state & SS_CTL) {
+                    goto cont_input;
+                }
+            }
+            /* CTL_ALIAS: Do nothing, tcp_fconnect will be called on it */
+        }
+
+        /* IPv6 routine */
+        if (af == AF_INET6 && in6_equal_host(&so->so_faddr6)) {
+                /* May be an add exec */
+                for (ex_ptr = slirp->guestfwd_list; ex_ptr;
+                     ex_ptr = ex_ptr->ex_next) {
+                    if (ex_ptr->ex_fport == so->so_fport &&
+                        in6_equal(&so->so_faddr6, &ex_ptr->ex_addr6)) {
+                        so->so_state |= SS_CTL;
+                        break;
+                    }
                 if (so->so_state & SS_CTL) {
                     goto cont_input;
                 }

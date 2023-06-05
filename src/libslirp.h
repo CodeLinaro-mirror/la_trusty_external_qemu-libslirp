@@ -348,20 +348,45 @@ int slirp_add_guestfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
 /* TODO: rather identify a guestfwd through an opaque pointer instead of through
  * the guest_addr */
 
+/* Set up port forwarding between a port in the guest network and a
+ * callback that will receive the data coming from the port for IPv6 address */
+int slirp_add_guestxfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
+                       struct in6_addr *guest_addr, int guest_port);
+
 /* This is called by the application for a guestfwd, to determine how much data
  * can be received by the forwarded port through a call to slirp_socket_recv. */
 SLIRP_EXPORT
 size_t slirp_socket_can_recv(Slirp *slirp, struct in_addr guest_addr,
                              int guest_port);
+
+/* This is called by the application for a guestfwd, to determine how much data
+ * can be received by the forwarded port through a call to slirp_socket_recv.
+ * IPv6 version. */
+SLIRP_EXPORT
+size_t slirp_socket_can_recvx(Slirp *slirp, struct in6_addr *guest_addr,
+                             int guest_port);
+
 /* This is called by the application for a guestfwd, to provide the data to be
  * sent on the forwarded port */
 SLIRP_EXPORT
 void slirp_socket_recv(Slirp *slirp, struct in_addr guest_addr, int guest_port,
                        const uint8_t *buf, int size);
 
+/* This is called by the application for a guestfwd, to provide the data to be
+ * sent on the forwarded port
+ * IPv6 version. */
+SLIRP_EXPORT
+void slirp_socket_recvx(Slirp *slirp, struct in6_addr *guest_addr, int guest_port,
+                       const uint8_t *buf, int size);
+
 /* Remove entries added by slirp_add_exec, slirp_add_unix or slirp_add_guestfwd */
 SLIRP_EXPORT
 int slirp_remove_guestfwd(Slirp *slirp, struct in_addr guest_addr,
+                          int guest_port);
+
+/* Remove entries added by slirp_add_x_exec, slirp_x_unix or slirp_add_guestxfwd */
+/* Used by IPv6 guestfwd */
+int slirp_remove_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
                           int guest_port);
 
 /* Return a human-readable state of the slirp stack */

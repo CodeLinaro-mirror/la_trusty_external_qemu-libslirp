@@ -23,6 +23,9 @@
  * THE SOFTWARE.
  */
 #include "slirp.h"
+#include "ip6.h"
+#include "misc.h"
+#include <netinet/in.h>
 
 #ifndef g_warning_once
 #define g_warning_once g_warning
@@ -1208,7 +1211,7 @@ static void arp_input(Slirp *slirp, const uint8_t *pkt, int pkt_len)
             if (ah->ar_tip == slirp->vnameserver_addr.s_addr ||
                 ah->ar_tip == slirp->vhost_addr.s_addr)
                 goto arp_ok;
-            /* TODO: IPv6 */
+
             for (ex_ptr = slirp->guestfwd_list; ex_ptr;
                  ex_ptr = ex_ptr->ex_next) {
                 if (ex_ptr->ex_addr.s_addr == ah->ar_tip)
@@ -1569,6 +1572,24 @@ static bool check_guestfwd(Slirp *slirp, struct in_addr *guest_addr,
     return true;
 }
 
+static bool check_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
+                            int guest_port)
+{
+    struct gfwd_list *tmp_ptr;
+
+    /* TODO: check prefix/mask */
+
+    /* Check if it's "bound" */
+    for (tmp_ptr = slirp->guestfwd_list; tmp_ptr; tmp_ptr = tmp_ptr->ex_next) {
+        if (guest_port == tmp_ptr->ex_fport &&
+            in6_equal(guest_addr, &tmp_ptr->ex_addr6)) {
+                return false;
+            }
+    }
+
+    return true;
+}
+
 int slirp_add_exec(Slirp *slirp, const char *cmdline,
                    struct in_addr *guest_addr, int guest_port)
 {
@@ -1608,10 +1629,30 @@ int slirp_add_guestfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
     return 0;
 }
 
+int slirp_add_guestxfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
+                       struct in6_addr *guest_addr, int guest_port)
+{
+    /* Add check_guestxfwd() here */
+    if (!check_guestxfwd(slirp, guest_addr, guest_port)) {
+        return -1;
+    }
+
+    add_guestxfwd(&slirp->guestfwd_list, write_cb, opaque, guest_addr,
+                 htons(guest_port));
+    return 0;
+}
+
 int slirp_remove_guestfwd(Slirp *slirp, struct in_addr guest_addr,
                           int guest_port)
 {
     return remove_guestfwd(&slirp->guestfwd_list, guest_addr,
+                           htons(guest_port));
+}
+
+int slirp_remove_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
+                          int guest_port)
+{
+    return remove_guestxfwd(&slirp->guestfwd_list, guest_addr,
                            htons(guest_port));
 }
 
@@ -1638,12 +1679,26 @@ slirp_ssize_t slirp_send(struct socket *so, const void *buf, size_t len, int fla
     return send(so->s, buf, len, flags);
 }
 
+struct socket *slirp_find_ctl_socketx(Slirp *slirp, struct in6_addr *guest_addr,
+                                     int guest_port)
+{
+    struct socket *so;
+
+    for (so = slirp->tcb.so_next; so != &slirp->tcb; so = so->so_next) {
+        if (in6_equal(&so->so_faddr6, guest_addr) &&
+            htons(so->so_fport) == guest_port) {
+            return so;
+        }
+    }
+
+    return NULL;
+}
+
 struct socket *slirp_find_ctl_socket(Slirp *slirp, struct in_addr guest_addr,
                                      int guest_port)
 {
     struct socket *so;
 
-    /* TODO: IPv6 */
     for (so = slirp->tcb.so_next; so != &slirp->tcb; so = so->so_next) {
         if (so->so_faddr.s_addr == guest_addr.s_addr &&
             htons(so->so_fport) == guest_port) {
@@ -1674,11 +1729,47 @@ size_t slirp_socket_can_recv(Slirp *slirp, struct in_addr guest_addr,
     return sopreprbuf(so, iov, NULL);
 }
 
+size_t slirp_socket_can_recvx(Slirp *slirp, struct in6_addr *guest_addr,
+                             int guest_port)
+{
+    struct iovec iov[2];
+    struct socket *so;
+
+    so = slirp_find_ctl_socketx(slirp, guest_addr, guest_port);
+
+    if (!so || so->so_state & SS_NOFDREF) {
+        return 0;
+    }
+
+    if (!CONN_CANFRCV(so) || so->so_snd.sb_cc >= (so->so_snd.sb_datalen / 2)) {
+        /* If the sb is already half full, we will wait for the guest to consume it,
+         * and notify again in sbdrop() when the sb becomes less than half full. */
+        return 0;
+    }
+
+    return sopreprbuf(so, iov, NULL);
+}
+
 void slirp_socket_recv(Slirp *slirp, struct in_addr guest_addr, int guest_port,
                        const uint8_t *buf, int size)
 {
     int ret;
     struct socket *so = slirp_find_ctl_socket(slirp, guest_addr, guest_port);
+
+    if (!so)
+        return;
+
+    ret = soreadbuf(so, (const char *)buf, size);
+
+    if (ret > 0)
+        tcp_output(sototcpcb(so));
+}
+
+void slirp_socket_recvx(Slirp *slirp, struct in6_addr *guest_addr, int guest_port,
+                       const uint8_t *buf, int size)
+{
+    int ret;
+    struct socket *so = slirp_find_ctl_socketx(slirp, guest_addr, guest_port);
 
     if (!so)
         return;

@@ -6,6 +6,7 @@
 
 #include "slirp.h"
 #include "ip6_icmp.h"
+#include "misc.h"
 
 #define NDP_Interval \
     g_rand_int_range(slirp->grand, NDP_MinRtrAdvInterval, NDP_MaxRtrAdvInterval)
@@ -475,6 +476,7 @@ static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
     struct ethhdr *eth = mtod(m, struct ethhdr *);
     m->m_len -= ETH_HLEN;
     m->m_data += ETH_HLEN;
+    struct gfwd_list *ex_ptr;
 
     switch (icmp->icmp6_type) {
     case ICMP6_NDP_RS:
@@ -505,6 +507,16 @@ static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
                 /* Gratuitous NDP */
                 ndp_table_add(slirp, ip->ip_src, eth->h_source);
                 ndp_send_na(slirp, ip, icmp);
+            }
+
+            /* If the IP address is in guestfwd list, add it to table */
+            /* Following arp_input() */
+            for (ex_ptr = slirp->guestfwd_list; ex_ptr;
+                 ex_ptr = ex_ptr->ex_next) {
+                    if (in6_equal(&ex_ptr->ex_addr6, &icmp->icmp6_nns.target)) {
+                        ndp_table_add(slirp, ip->ip_src, eth->h_source);
+                        ndp_send_na(slirp, ip, icmp);
+                    }
             }
         }
         break;

@@ -11,7 +11,12 @@
 struct gfwd_list {
     SlirpWriteCb write_cb;
     void *opaque;
-    struct in_addr ex_addr; /* Server address */
+    union {
+        struct in_addr ex_addr; /* IPv4 Server address */
+        struct in6_addr ex_addr6; /* IPv6 Server address */
+    } ip_body;
+#define ex_addr6 ip_body.ex_addr6
+#define ex_addr ip_body.ex_addr
     int ex_fport; /* Port to telnet to */
     char *ex_exec; /* Command line of what to exec */
     char *ex_unix; /* unix socket */
@@ -68,6 +73,11 @@ int open_unix(struct socket *so, const char *unixsock);
 struct gfwd_list *add_guestfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
                                void *opaque, struct in_addr addr, int port);
 
+/* Add a IPv6 guest forward on the given address and port, with guest data being
+ * forwarded by calling write_cb */
+struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
+                               void *opaque, struct in6_addr *addr, int port);
+
 /* Run the given command in the backaground, and send its output to the guest on
  * the given address and port */
 struct gfwd_list *add_exec(struct gfwd_list **ex_ptr, const char *cmdline,
@@ -80,6 +90,9 @@ struct gfwd_list *add_unix(struct gfwd_list **ex_ptr, const char *unixsock,
 
 /* Remove the guest forward bound to the given address and port */
 int remove_guestfwd(struct gfwd_list **ex_ptr, struct in_addr addr, int port);
+
+/* Remove the IPv6 guest forward bound to the given address and port */
+int remove_guestxfwd(struct gfwd_list **ex_ptr, struct in6_addr *addr, int port);
 
 /* Bind the socket to the outbound address specified in the slirp configuration */
 int slirp_bind_outbound(struct socket *so, unsigned short af);
