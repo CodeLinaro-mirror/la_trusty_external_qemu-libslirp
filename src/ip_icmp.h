@@ -165,4 +165,10 @@ void icmp_reflect(struct mbuf *);
 void icmp_receive(struct socket *so);
 void icmp_detach(struct socket *so);
 
+#ifndef WIN32
+int ping_binary_send(struct socket *so, struct mbuf *m, int hlen);
+int ping_binary_recv(struct socket *so, struct ip *ip, struct icmp *icp);
+void ping_binary_close(struct socket *so);
+#endif
+
 #endif
