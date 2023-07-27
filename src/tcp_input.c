@@ -619,19 +619,24 @@ findso:
         }
 
         /* IPv6 routine */
-        if (af == AF_INET6 && in6_equal_host(&so->so_faddr6)) {
+        if (af == AF_INET6 &&
+            (in6_equal_net(&so->so_faddr6, &slirp->vprefix_addr6,
+                           slirp->vprefix_len))) {
                 /* May be an add exec */
-                for (ex_ptr = slirp->guestfwd_list; ex_ptr;
-                     ex_ptr = ex_ptr->ex_next) {
-                    if (ex_ptr->ex_fport == so->so_fport &&
-                        in6_equal(&so->so_faddr6, &ex_ptr->ex_addr6)) {
-                        so->so_state |= SS_CTL;
-                        break;
+                if (!in6_equal(&so->so_faddr6, &slirp->vhost_addr6) &&
+                    !in6_equal(&so->so_faddr6, &slirp->vnameserver_addr6)) {
+                    for (ex_ptr = slirp->guestfwd_list; ex_ptr;
+                         ex_ptr = ex_ptr->ex_next) {
+                        if (ex_ptr->ex_fport == so->so_fport &&
+                            in6_equal(&so->so_faddr6, &ex_ptr->ex_addr6)) {
+                            so->so_state |= SS_CTL;
+                            break;
+                        }
                     }
-                if (so->so_state & SS_CTL) {
-                    goto cont_input;
+                    if (so->so_state & SS_CTL) {
+                        goto cont_input;
+                    }
                 }
-            }
             /* CTL_ALIAS: Do nothing, tcp_fconnect will be called on it */
         }
 
