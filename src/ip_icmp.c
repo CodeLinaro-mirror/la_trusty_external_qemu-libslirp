@@ -117,7 +117,13 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
         }
     }
     if (so->s == -1) {
+#ifndef WIN32
+        int res = ping_binary_send(so, m, hlen);
+        if (res != 0)
+           return -1;
+#else
         return -1;
+#endif
     }
     so->slirp->cb->register_poll_fd(so->s, so->slirp->opaque);
 
@@ -140,6 +146,11 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
 
     slirp_insque(so, &so->slirp->icmp);
 
+#ifndef _WIN32
+    if (so->ping_pipe != NULL)
+        return 0;
+#endif
+
     if (sendto(so->s, m->m_data + hlen, m->m_len - hlen, 0,
                (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         DEBUG_MISC("icmp_input icmp sendto tx errno = %d-%s", errno,
@@ -154,7 +165,14 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
 void icmp_detach(struct socket *so)
 {
     so->slirp->cb->unregister_poll_fd(so->s, so->slirp->opaque);
+#ifndef WIN32
+    if (so->ping_pipe != NULL)
+        ping_binary_close(so);
+    else
+        closesocket(so->s);
+#else
     closesocket(so->s);
+#endif
     sofree(so);
 }
 
@@ -494,14 +512,22 @@ void icmp_receive(struct socket *so)
     int hlen = ip->ip_hl << 2;
     uint8_t error_code;
     struct icmp *icp;
-    int id, len;
+    int id, len = -1;
 
     m->m_data += hlen;
     m->m_len -= hlen;
     icp = mtod(m, struct icmp *);
 
     id = icp->icmp_id;
+
+#ifndef WIN32
+    if (so->ping_pipe != NULL)
+        len = ping_binary_recv(so, ip, icp);
+    else
+        len = recv(so->s, icp, M_ROOM(m), 0);
+#else
     len = recv(so->s, icp, M_ROOM(m), 0);
+#endif
 
     if (so->so_type == IPPROTO_IP) {
         if (len >= sizeof(struct ip)) {
