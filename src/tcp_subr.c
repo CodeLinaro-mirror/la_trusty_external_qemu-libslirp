@@ -967,7 +967,7 @@ int tcp_ctl(struct socket *so)
     if ((so->so_ffamily == AF_INET &&
          so->so_faddr.s_addr != slirp->vhost_addr.s_addr) ||
         (so->so_ffamily == AF_INET6 &&
-         in6_equal(&so->so_faddr6, &slirp->vhost_addr6))) {
+         !in6_equal(&so->so_faddr6, &slirp->vhost_addr6))) {
         /* Check if it's pty_exec */
         for (ex_ptr = slirp->guestfwd_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
             if (ex_ptr->ex_fport == so->so_fport &&
