@@ -507,6 +507,7 @@ static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
                 /* Gratuitous NDP */
                 ndp_table_add(slirp, ip->ip_src, eth->h_source);
                 ndp_send_na(slirp, ip, icmp);
+                return;
             }
 
             /* If the IP address is in guestfwd list, add it to table */
@@ -516,6 +517,7 @@ static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
                     if (in6_equal(&ex_ptr->ex_addr6, &icmp->icmp6_nns.target)) {
                         ndp_table_add(slirp, ip->ip_src, eth->h_source);
                         ndp_send_na(slirp, ip, icmp);
+                        break;
                     }
             }
         }
