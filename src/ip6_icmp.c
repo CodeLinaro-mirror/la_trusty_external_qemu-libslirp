@@ -509,16 +509,29 @@ static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
                 ndp_send_na(slirp, ip, icmp);
                 return;
             }
-
-            /* If the IP address is in guestfwd list, add it to table */
-            /* Following arp_input() */
-            for (ex_ptr = slirp->guestfwd_list; ex_ptr;
-                 ex_ptr = ex_ptr->ex_next) {
+            /*
+             * If the IP address is in guestfwd list, add it to table.
+             * Following arp_input()
+             * Make sure the IP has proper prefix, check if it's v6 DNS
+             * or v6 vhost before iterating thru the gfwd_list. If so,
+             * handle it directly.
+             */
+            if (in6_equal_net(&icmp->icmp6_nns.target, &slirp->vprefix_addr6,
+                           slirp->vprefix_len)) {
+                if (in6_equal(&icmp->icmp6_nns.target, &slirp->vhost_addr6) ||
+                    in6_equal(&icmp->icmp6_nns.target, &slirp->vnameserver_addr6)) {
+                    ndp_table_add(slirp, ip->ip_src, eth->h_source);
+                    ndp_send_na(slirp, ip, icmp);
+                    return;
+                }
+                for (ex_ptr = slirp->guestfwd_list; ex_ptr;
+                     ex_ptr = ex_ptr->ex_next) {
                     if (in6_equal(&ex_ptr->ex_addr6, &icmp->icmp6_nns.target)) {
                         ndp_table_add(slirp, ip->ip_src, eth->h_source);
                         ndp_send_na(slirp, ip, icmp);
-                        break;
+                        return;
                     }
+                }
             }
         }
         break;
