@@ -1545,7 +1545,6 @@ int slirp_add_hostxfwd(Slirp *slirp,
     return 0;
 }
 
-/* TODO: IPv6 */
 static bool check_guestfwd(Slirp *slirp, struct in_addr *guest_addr,
                            int guest_port)
 {
@@ -1577,7 +1576,25 @@ static bool check_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
 {
     struct gfwd_list *tmp_ptr;
 
-    /* TODO: check prefix/mask */
+    /*
+     * We can assign a random server address in the same subnet for it,
+     * but for now, let's reject empty address.
+     */
+    if (!guest_addr) {
+        return false;
+    }
+
+    /* Should have the same prefix */
+    if (!in6_equal_net(guest_addr, &slirp->vprefix_addr6,
+                      slirp->vprefix_len)) {
+        return false;
+    }
+
+    /* Check if it uses vhost or DNS address */
+    if ((in6_equal(guest_addr, &slirp->vhost_addr6) ||
+         in6_equal(guest_addr, &slirp->vnameserver_addr6))) {
+        return false;
+    }
 
     /* Check if it's "bound" */
     for (tmp_ptr = slirp->guestfwd_list; tmp_ptr; tmp_ptr = tmp_ptr->ex_next) {
