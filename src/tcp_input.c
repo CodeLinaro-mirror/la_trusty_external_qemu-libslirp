@@ -618,34 +618,13 @@ findso:
             /* CTL_ALIAS: Do nothing, tcp_fconnect will be called on it */
         }
 
-        /* IPv6 routine */
-        if (af == AF_INET6 &&
-            (in6_equal_net(&so->so_faddr6, &slirp->vprefix_addr6,
-                           slirp->vprefix_len))) {
-                /* May be an add exec */
-                if (!in6_equal(&so->so_faddr6, &slirp->vhost_addr6) &&
-                    !in6_equal(&so->so_faddr6, &slirp->vnameserver_addr6)) {
-                    for (ex_ptr = slirp->guestfwd_list; ex_ptr;
-                         ex_ptr = ex_ptr->ex_next) {
-                        if (ex_ptr->ex_fport == so->so_fport &&
-                            in6_equal(&so->so_faddr6, &ex_ptr->ex_addr6)) {
-                            so->so_state |= SS_CTL;
-                            break;
-                        }
-                    }
-                    if (so->so_state & SS_CTL) {
-                        goto cont_input;
-                    }
-                }
-            /* CTL_ALIAS: Do nothing, tcp_fconnect will be called on it */
-        }
+        /* IPv6 guestfwd is done in tcp_fconnect() */
 
         if (so->so_emu & EMU_NOCONNECT) {
             so->so_emu &= ~EMU_NOCONNECT;
             goto cont_input;
         }
-
-        if ((tcp_fconnect(so, so->so_ffamily) == -1) && (errno != EAGAIN) &&
+        if ((tcp_fconnect(so, so->so_ffamily, slirp->guestfwd_list) == -1) && (errno != EAGAIN) &&
             (errno != EINPROGRESS) && (errno != EWOULDBLOCK)) {
             uint8_t code;
             DEBUG_MISC(" tcp fconnect errno = %d-%s", errno, strerror(errno));

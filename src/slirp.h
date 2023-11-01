@@ -361,7 +361,7 @@ void tcp_sockclosed(struct tcpcb *);
  * Connect to a host on the Internet
  * Called by tcp_input
  */
-int tcp_fconnect(struct socket *, unsigned short af);
+int tcp_fconnect(struct socket *, unsigned short af, struct gfwd_list *);
 /* Accept the connection from the Internet, and connect to the guest */
 void tcp_connect(struct socket *);
 /* Attach a TCPCB to a socket */

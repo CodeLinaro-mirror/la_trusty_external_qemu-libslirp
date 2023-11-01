@@ -38,6 +38,7 @@ SLIRP_4.5 {
 SLIRP_4.7 {
     slirp_handle_timer;
     slirp_add_guestxfwd;
+    slirp_add_guestxfwd_new;
     slirp_socket_can_recvx;
     slirp_socket_recvx;
 } SLIRP_4.5;

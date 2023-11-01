@@ -27,23 +27,34 @@ void slirp_remque(void *a)
     element->qh_rlink = NULL;
 }
 
-struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
-                               void *opaque, struct in6_addr *addr, int port)
+struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
+                                struct in6_addr *server_addr, int server_port,
+                                struct in6_addr *destination_addr,
+                                int destination_port)
 {
     struct gfwd_list *f = g_new0(struct gfwd_list, 1);
     char addrstr[INET6_ADDRSTRLEN];
 
     DEBUG_CALL("add_guestxfwd");
-    DEBUG_ARG("port = %d", port);
 
-    inet_ntop(AF_INET6, addr, addrstr, INET6_ADDRSTRLEN);
+    inet_ntop(AF_INET6, server_addr, addrstr, INET6_ADDRSTRLEN);
 
-    DEBUG_ARG("addr = %s", addrstr);
+    DEBUG_ARG("server ip: [%s]:%d", addrstr, ntohs(server_port));
 
-    f->write_cb = write_cb;
-    f->opaque = opaque;
-    f->ex_fport = port;
-    f->ex_addr6 = *addr;
+    inet_ntop(AF_INET6, destination_addr, addrstr, INET6_ADDRSTRLEN);
+
+    DEBUG_ARG("target ip: [%s]:%d", addrstr, ntohs(destination_port));
+
+    /* We don't care about the chardev backend. */
+    f->write_cb = NULL;
+    f->opaque = NULL;
+
+    /* Set server and target addresses and ports */
+    f->ex_fport = server_port;
+    f->ex_addr6 = *server_addr;
+    f->target_addr6 = *destination_addr;
+    f->target_port = destination_port;
+
     f->ex_next = *ex_ptr;
     *ex_ptr = f;
 

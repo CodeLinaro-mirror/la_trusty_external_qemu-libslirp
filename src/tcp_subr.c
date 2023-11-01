@@ -375,9 +375,10 @@ void tcp_sockclosed(struct tcpcb *tp)
  * nonblocking.  Connect returns after the SYN is sent, and does
  * not wait for ACK+SYN.
  */
-int tcp_fconnect(struct socket *so, unsigned short af)
+int tcp_fconnect(struct socket *so, unsigned short af, struct gfwd_list *head)
 {
     int ret = 0;
+    struct gfwd_list *p_fwd;
 
     DEBUG_CALL("tcp_fconnect");
     DEBUG_ARG("so = %p", so);
@@ -411,6 +412,22 @@ int tcp_fconnect(struct socket *so, unsigned short af)
         DEBUG_CALL(" connect()ing");
         if (sotranslate_out(so, &addr) < 0) {
             return -1;
+        }
+
+        /*
+         * Do IPv6 guest/outbound forwarding.
+         * The duplicated so->fhost.ss address is the one we care about,
+         * as it's the one being used in connect().
+         */
+        if (addr.ss_family == AF_INET6 && head) {
+            struct sockaddr_in6 *p_addr =  (struct sockaddr_in6 *)&addr;
+            for (p_fwd = head; p_fwd; p_fwd = p_fwd->ex_next) {
+                if (p_fwd->ex_fport == p_addr->sin6_port &&
+                    in6_equal(&p_addr->sin6_addr, &p_fwd->ex_addr6)) {
+                    p_addr->sin6_addr = p_fwd->target_addr6;
+                    p_addr->sin6_port = p_fwd->target_port;
+                }
+            }
         }
 
         /* We don't care what port we get */

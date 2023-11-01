@@ -17,7 +17,14 @@ struct gfwd_list {
     } ip_body;
 #define ex_addr6 ip_body.ex_addr6
 #define ex_addr ip_body.ex_addr
+    union {
+        struct in_addr target_addr; /* IPv4 Destination address */
+        struct in6_addr target_addr6; /* IPv6 Destination address */
+    } target_ip_body;
+#define target_addr6 target_ip_body.target_addr6
+#define target_addr target_ip_body.target_addr
     int ex_fport; /* Port to telnet to */
+    int target_port; /* Port to forward to on host side */
     char *ex_exec; /* Command line of what to exec */
     char *ex_unix; /* unix socket */
     struct gfwd_list *ex_next;
@@ -75,8 +82,10 @@ struct gfwd_list *add_guestfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
 
 /* Add a IPv6 guest forward on the given address and port, with guest data being
  * forwarded by calling write_cb */
-struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
-                               void *opaque, struct in6_addr *addr, int port);
+struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
+                                struct in6_addr *server_addr, int server_port,
+                                struct in6_addr *destination_addr,
+                                int destination_port);
 
 /* Run the given command in the backaground, and send its output to the guest on
  * the given address and port */

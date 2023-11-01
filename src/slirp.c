@@ -1584,17 +1584,13 @@ static bool check_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
         return false;
     }
 
-    /* Should have the same prefix */
-    if (!in6_equal_net(guest_addr, &slirp->vprefix_addr6,
-                      slirp->vprefix_len)) {
-        return false;
-    }
-
-    /* Check if it uses vhost or DNS address */
-    if ((in6_equal(guest_addr, &slirp->vhost_addr6) ||
-         in6_equal(guest_addr, &slirp->vnameserver_addr6))) {
-        return false;
-    }
+    /*
+     * The original address check requires the server address to be under the
+     * same subnet/prefix of the QEMU network, otherwise it won't be added into
+     * the gfwd_list.
+     * Remove all these checks since we want to forward random addresses to
+     * host (most likely).
+     */
 
     /* Check if it's "bound" */
     for (tmp_ptr = slirp->guestfwd_list; tmp_ptr; tmp_ptr = tmp_ptr->ex_next) {
@@ -1647,15 +1643,20 @@ int slirp_add_guestfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
 }
 
 int slirp_add_guestxfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
-                       struct in6_addr *guest_addr, int guest_port)
+                        struct in6_addr *guest_addr, int guest_port) {
+    return -1;
+}
+
+int slirp_add_guestxfwd_new(Slirp *slirp, struct in6_addr *server_addr,
+                        int server_port, struct in6_addr *destination_addr,
+                        int destination_port)
 {
-    /* Add check_guestxfwd() here */
-    if (!check_guestxfwd(slirp, guest_addr, guest_port)) {
+    if (!check_guestxfwd(slirp, server_addr, server_port)) {
         return -1;
     }
 
-    add_guestxfwd(&slirp->guestfwd_list, write_cb, opaque, guest_addr,
-                 htons(guest_port));
+    add_guestxfwd(&slirp->guestfwd_list, server_addr, htons(server_port),
+                  destination_addr, htons(destination_port));
     return 0;
 }
 
