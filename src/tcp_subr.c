@@ -415,7 +415,8 @@ int tcp_fconnect(struct socket *so, unsigned short af, struct gfwd_list *head)
         }
 
         /*
-         * Do IPv6 guest/outbound forwarding.
+         * Do IPv6 guest/outbound TCP forwarding.
+         * Make sure we check the protocol for it.
          * The duplicated so->fhost.ss address is the one we care about,
          * as it's the one being used in connect().
          * If guest server address is [::], only check port.
@@ -424,6 +425,7 @@ int tcp_fconnect(struct socket *so, unsigned short af, struct gfwd_list *head)
             struct sockaddr_in6 *p_addr =  (struct sockaddr_in6 *)&addr;
             for (p_fwd = head; p_fwd; p_fwd = p_fwd->ex_next) {
                 if (p_fwd->ex_fport == p_addr->sin6_port &&
+                    p_fwd->protocol == GFWD_TCP &&
                     (in6_equal(&p_fwd->ex_addr6, &in6addr_any) ||
                      in6_equal(&p_addr->sin6_addr, &p_fwd->ex_addr6))) {
                     p_addr->sin6_addr = p_fwd->target_addr6;

@@ -27,10 +27,18 @@ void slirp_remque(void *a)
     element->qh_rlink = NULL;
 }
 
+static enum GFwdProtocols parse_protocol(int protocol) {
+    switch (protocol) {
+        case 1: return GFWD_TCP;
+        case 2: return GFWD_UDP;
+        default: return GFWD_MAX;
+    }
+}
+
 struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
                                 struct in6_addr *server_addr, int server_port,
                                 struct in6_addr *destination_addr,
-                                int destination_port)
+                                int destination_port, int protocol)
 {
     struct gfwd_list *f = g_new0(struct gfwd_list, 1);
     char addrstr[INET6_ADDRSTRLEN];
@@ -54,6 +62,8 @@ struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
     f->ex_addr6 = *server_addr;
     f->target_addr6 = *destination_addr;
     f->target_port = destination_port;
+
+    f->protocol = parse_protocol(protocol);
 
     f->ex_next = *ex_ptr;
     *ex_ptr = f;

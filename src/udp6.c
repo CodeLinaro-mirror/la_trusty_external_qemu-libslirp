@@ -133,7 +133,7 @@ void udp6_input(struct mbuf *m)
     /*
      * Now we sendto() the packet.
      */
-    if (sosendto(so, m) == -1) {
+    if (sosendtoudp6(so, m, slirp->guestfwd_list) == -1) {
         m->m_len += iphlen;
         m->m_data -= iphlen;
         *ip = save_ip;

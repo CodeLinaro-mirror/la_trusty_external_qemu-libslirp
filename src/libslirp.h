@@ -348,13 +348,18 @@ int slirp_add_guestfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
 /* TODO: rather identify a guestfwd through an opaque pointer instead of through
  * the guest_addr */
 
-/* Dummy IPv6 guestfwd function, the old datapath is not being used, and will
- * be removed later, putting it here for compatibility issue. */
-int slirp_add_guestxfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
-                        struct in6_addr *guest_addr, int guest_port);
+/* Set up port forwarding between a port in the guest network and a
+ * callback that will receive the data coming from the port for IPv6 address.
+ * This function will be enabled after UDP v6 port forwarding feature is done.
+ */
+int slirp_add_guestxfwd(Slirp *slirp, struct in6_addr *server_addr,
+                        int server_port, struct in6_addr *destination_addr,
+                        int destination_port, int protocol);
 
 /* Set up port forwarding between a port in the guest network and a
- * callback that will receive the data coming from the port for IPv6 address */
+ * callback that will receive the data coming from the port for IPv6 address
+ * TODO(b/308833922): remove this function once UDP port forwarding is done.
+ */
 int slirp_add_guestxfwd_new(Slirp *slirp, struct in6_addr *server_addr,
                         int server_port, struct in6_addr *destination_addr,
                         int destination_port);

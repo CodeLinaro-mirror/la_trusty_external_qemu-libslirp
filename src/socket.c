@@ -655,7 +655,7 @@ void sorecvfrom(struct socket *so)
                             &addrlen);
         DEBUG_MISC(" did recvfrom %d, errno = %d-%s", m->m_len, errno,
                    strerror(errno));
-        if (m->m_len < 0) {    	
+        if (m->m_len < 0) {
             if (errno == ENOTCONN) {
                 /*
                  * UDP socket got burnt, e.g. by suspend on iOS. Tear it down
@@ -791,6 +791,70 @@ int sosendto(struct socket *so, struct mbuf *m)
     return 0;
 }
 
+/*
+ * Dedicated sendto() function for v6 UDP.
+ * Added port forwarding.
+ */
+int sosendtoudp6(struct socket *so, struct mbuf *m, struct gfwd_list *head)
+{
+    int ret;
+    struct sockaddr_storage addr;
+    struct gfwd_list *p_fwd;
+
+    DEBUG_CALL("sosendtoudp6");
+    DEBUG_ARG("so = %p", so);
+    DEBUG_ARG("m = %p", m);
+
+    addr = so->fhost.ss;
+
+    /*
+     * Do IPv6 guest/outbound UDP forwarding.
+     * Make sure we check the protocol.
+     * The duplicated so->fhost.ss address is the one we care about,
+     * as it's the one being used in connect().
+     * If guest server address is [::], only check port.
+     * There is no need to check against vhost address as it was handled
+     * in udp6_input().
+     */
+    if (addr.ss_family == AF_INET6 && head) {
+        struct sockaddr_in6 *p_addr = (struct sockaddr_in6 *)&addr;
+        for (p_fwd = head; p_fwd; p_fwd = p_fwd->ex_next) {
+            if (p_fwd->ex_fport == p_addr->sin6_port &&
+                p_fwd->protocol == GFWD_UDP &&
+                (in6_equal(&p_fwd->ex_addr6, &in6addr_any) ||
+                 in6_equal(&p_addr->sin6_addr, &p_fwd->ex_addr6))) {
+                p_addr->sin6_addr = p_fwd->target_addr6;
+                p_addr->sin6_port = p_fwd->target_port;
+            }
+        }
+    }
+
+    DEBUG_CALL(" sendto()ing)");
+    if (sotranslate_out(so, &addr) < 0) {
+        return -1;
+    }
+
+    /* Don't care what port we get */
+    ret = sendto(so->s, m->m_data, m->m_len, 0, (struct sockaddr *)&addr,
+                 sockaddr_size(&addr));
+    if (ret < 0)
+        return -1;
+
+    /*
+     * Kill the socket if there's no reply in 4 minutes,
+     * but only if it's an expirable socket
+     */
+    if (so->so_expire)
+        so->so_expire = curtime + SO_EXPIRE;
+    so->so_state &= SS_PERSISTENT_MASK;
+    so->so_state |= SS_ISFCONNECTED; /* So that it gets select()ed */
+    return 0;
+}
+
+/*
+ * Listen for incoming TCP connections
+ * On failure errno contains the reason.
+ */
 struct socket *tcpx_listen(Slirp *slirp,
                            const struct sockaddr *haddr, socklen_t haddrlen,
                            const struct sockaddr *laddr, socklen_t laddrlen,

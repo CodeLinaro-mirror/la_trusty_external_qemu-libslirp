@@ -8,6 +8,12 @@
 
 #include "libslirp.h"
 
+enum GFwdProtocols {
+    GFWD_TCP = 1,
+    GFWD_UDP = 2,
+    GFWD_MAX = 3, /* Invalid */
+};
+
 struct gfwd_list {
     SlirpWriteCb write_cb;
     void *opaque;
@@ -25,6 +31,7 @@ struct gfwd_list {
 #define target_addr target_ip_body.target_addr
     int ex_fport; /* Port to telnet to */
     int target_port; /* Port to forward to on host side */
+    enum GFwdProtocols protocol; /* Port forwarding protocol */
     char *ex_exec; /* Command line of what to exec */
     char *ex_unix; /* unix socket */
     struct gfwd_list *ex_next;
@@ -85,7 +92,7 @@ struct gfwd_list *add_guestfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
 struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
                                 struct in6_addr *server_addr, int server_port,
                                 struct in6_addr *destination_addr,
-                                int destination_port);
+                                int destination_port, int protocol);
 
 /* Run the given command in the backaground, and send its output to the guest on
  * the given address and port */

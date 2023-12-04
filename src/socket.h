@@ -198,6 +198,8 @@ int sowrite(struct socket *);
 void sorecvfrom(struct socket *);
 /* Send data to the Internet UDP socket */
 int sosendto(struct socket *, struct mbuf *);
+/* Send data to the Internet for v6 UPD, with port forwarding feature */
+int sosendtoudp6(struct socket *so, struct mbuf *m, struct gfwd_list *head);
 /* Listen for incoming TCPv4 connections on this haddr+hport */
 struct socket *tcp_listen(Slirp *, uint32_t haddr, unsigned hport, uint32_t laddr, unsigned lport, int flags);
 /*
