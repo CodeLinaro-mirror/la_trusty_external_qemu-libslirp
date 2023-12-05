@@ -1655,24 +1655,6 @@ int slirp_add_guestxfwd(Slirp *slirp, struct in6_addr *server_addr,
     return 0;
 }
 
-int slirp_add_guestxfwd_new(Slirp *slirp, struct in6_addr *server_addr,
-                        int server_port, struct in6_addr *destination_addr,
-                        int destination_port)
-{
-    if (!check_guestxfwd(slirp, server_addr, server_port)) {
-        return -1;
-    }
-
-    /*
-     * TODO(b/308833922): remove this function and parse protocol
-     * from QEMU command line.
-     * For compatibility issue, use TCP.
-     */
-    add_guestxfwd(&slirp->guestfwd_list, server_addr, htons(server_port),
-                  destination_addr, htons(destination_port), /* protocol = */1);
-    return 0;
-}
-
 int slirp_remove_guestfwd(Slirp *slirp, struct in_addr guest_addr,
                           int guest_port)
 {

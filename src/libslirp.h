@@ -356,14 +356,6 @@ int slirp_add_guestxfwd(Slirp *slirp, struct in6_addr *server_addr,
                         int server_port, struct in6_addr *destination_addr,
                         int destination_port, int protocol);
 
-/* Set up port forwarding between a port in the guest network and a
- * callback that will receive the data coming from the port for IPv6 address
- * TODO(b/308833922): remove this function once UDP port forwarding is done.
- */
-int slirp_add_guestxfwd_new(Slirp *slirp, struct in6_addr *server_addr,
-                        int server_port, struct in6_addr *destination_addr,
-                        int destination_port);
-
 /* This is called by the application for a guestfwd, to determine how much data
  * can be received by the forwarded port through a call to slirp_socket_recv. */
 SLIRP_EXPORT
