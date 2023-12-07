@@ -985,16 +985,11 @@ int tcp_ctl(struct socket *so)
     DEBUG_CALL("tcp_ctl");
     DEBUG_ARG("so = %p", so);
 
-    if ((so->so_ffamily == AF_INET &&
-         so->so_faddr.s_addr != slirp->vhost_addr.s_addr) ||
-        (so->so_ffamily == AF_INET6 &&
-         !in6_equal(&so->so_faddr6, &slirp->vhost_addr6))) {
+    if (so->so_faddr.s_addr != slirp->vhost_addr.s_addr) {
         /* Check if it's pty_exec */
         for (ex_ptr = slirp->guestfwd_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
             if (ex_ptr->ex_fport == so->so_fport &&
-                (so->so_ffamily == AF_INET6 ?
-                 in6_equal(&so->so_faddr6, &ex_ptr->ex_addr6) :
-                 so->so_faddr.s_addr == ex_ptr->ex_addr.s_addr)) {
+                so->so_faddr.s_addr == ex_ptr->ex_addr.s_addr) {
                 if (ex_ptr->write_cb) {
                     so->s = SLIRP_INVALID_SOCKET;
                     so->guestfwd = ex_ptr;

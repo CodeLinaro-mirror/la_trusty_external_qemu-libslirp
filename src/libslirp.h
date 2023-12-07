@@ -362,24 +362,10 @@ SLIRP_EXPORT
 size_t slirp_socket_can_recv(Slirp *slirp, struct in_addr guest_addr,
                              int guest_port);
 
-/* This is called by the application for a guestfwd, to determine how much data
- * can be received by the forwarded port through a call to slirp_socket_recv.
- * IPv6 version. */
-SLIRP_EXPORT
-size_t slirp_socket_can_recvx(Slirp *slirp, struct in6_addr *guest_addr,
-                             int guest_port);
-
 /* This is called by the application for a guestfwd, to provide the data to be
  * sent on the forwarded port */
 SLIRP_EXPORT
 void slirp_socket_recv(Slirp *slirp, struct in_addr guest_addr, int guest_port,
-                       const uint8_t *buf, int size);
-
-/* This is called by the application for a guestfwd, to provide the data to be
- * sent on the forwarded port
- * IPv6 version. */
-SLIRP_EXPORT
-void slirp_socket_recvx(Slirp *slirp, struct in6_addr *guest_addr, int guest_port,
                        const uint8_t *buf, int size);
 
 /* Remove entries added by slirp_add_exec, slirp_add_unix or slirp_add_guestfwd */

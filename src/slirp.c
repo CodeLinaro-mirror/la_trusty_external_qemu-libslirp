@@ -1692,21 +1692,6 @@ slirp_ssize_t slirp_send(struct socket *so, const void *buf, size_t len, int fla
     return send(so->s, buf, len, flags);
 }
 
-struct socket *slirp_find_ctl_socketx(Slirp *slirp, struct in6_addr *guest_addr,
-                                     int guest_port)
-{
-    struct socket *so;
-
-    for (so = slirp->tcb.so_next; so != &slirp->tcb; so = so->so_next) {
-        if (in6_equal(&so->so_faddr6, guest_addr) &&
-            htons(so->so_fport) == guest_port) {
-            return so;
-        }
-    }
-
-    return NULL;
-}
-
 struct socket *slirp_find_ctl_socket(Slirp *slirp, struct in_addr guest_addr,
                                      int guest_port)
 {
@@ -1742,47 +1727,11 @@ size_t slirp_socket_can_recv(Slirp *slirp, struct in_addr guest_addr,
     return sopreprbuf(so, iov, NULL);
 }
 
-size_t slirp_socket_can_recvx(Slirp *slirp, struct in6_addr *guest_addr,
-                             int guest_port)
-{
-    struct iovec iov[2];
-    struct socket *so;
-
-    so = slirp_find_ctl_socketx(slirp, guest_addr, guest_port);
-
-    if (!so || so->so_state & SS_NOFDREF) {
-        return 0;
-    }
-
-    if (!CONN_CANFRCV(so) || so->so_snd.sb_cc >= (so->so_snd.sb_datalen / 2)) {
-        /* If the sb is already half full, we will wait for the guest to consume it,
-         * and notify again in sbdrop() when the sb becomes less than half full. */
-        return 0;
-    }
-
-    return sopreprbuf(so, iov, NULL);
-}
-
 void slirp_socket_recv(Slirp *slirp, struct in_addr guest_addr, int guest_port,
                        const uint8_t *buf, int size)
 {
     int ret;
     struct socket *so = slirp_find_ctl_socket(slirp, guest_addr, guest_port);
-
-    if (!so)
-        return;
-
-    ret = soreadbuf(so, (const char *)buf, size);
-
-    if (ret > 0)
-        tcp_output(sototcpcb(so));
-}
-
-void slirp_socket_recvx(Slirp *slirp, struct in6_addr *guest_addr, int guest_port,
-                       const uint8_t *buf, int size)
-{
-    int ret;
-    struct socket *so = slirp_find_ctl_socketx(slirp, guest_addr, guest_port);
 
     if (!so)
         return;
