@@ -390,9 +390,6 @@ struct tcpcb *tcp_drop(struct tcpcb *tp, int err);
 struct socket *slirp_find_ctl_socket(Slirp *slirp, struct in_addr guest_addr,
                                      int guest_port);
 
-struct socket *slirp_find_ctl_socketx(Slirp *slirp, struct in6_addr *guest_addr,
-                                     int guest_port);
-
 /* Send a frame to the virtual Ethernet board, i.e. call the application send_packet callback */
 void slirp_send_packet_all(Slirp *slirp, const void *buf, size_t len);
 
