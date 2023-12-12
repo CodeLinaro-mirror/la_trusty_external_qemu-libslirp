@@ -163,6 +163,7 @@ int udp6_output(struct socket *so, struct mbuf *m, const struct sockaddr_in6 *sa
 
     struct ip6 *ip;
     struct udphdr *uh;
+    struct gfwd_list *ex_ptr;
 
     DEBUG_CALL("udp6_output");
     DEBUG_ARG("so = %p", so);
@@ -185,6 +186,26 @@ int udp6_output(struct socket *so, struct mbuf *m, const struct sockaddr_in6 *sa
     /* Build UDP header */
     uh->uh_sport = saddr->sin6_port;
     uh->uh_dport = daddr->sin6_port;
+
+    /*
+     * Guestfwd response:
+     * Update the source address, if needed. As the guest APP might be expecting
+     * response from the paired address.
+     * The trick here is to use the original slirp socket's faddr (aka the
+     * original destination address) and port to be the source address and
+     * port, instead of the address and port in gfwd_list, as we can have
+     * in6addr_any as our ex_addr6.
+     */
+
+    for (ex_ptr = slirp->guestfwd_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
+        if (ex_ptr->target_port == saddr->sin6_port &&
+            ex_ptr->protocol == GFWD_UDP &&
+            in6_equal(&ex_ptr->target_addr6, &saddr->sin6_addr)) {
+            ip->ip_src = so->so_faddr6;
+            uh->uh_sport = so->so_fport6;
+        }
+    }
+
     uh->uh_ulen = ip->ip_pl;
     uh->uh_sum = 0;
     uh->uh_sum = ip6_cksum(m);
