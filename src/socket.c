@@ -84,6 +84,10 @@ void sofree(struct socket *so)
 {
     Slirp *slirp = so->slirp;
 
+    if (so->so_state) {
+        if (slirp->http_proxy_on && slirp->cb->remove)
+            slirp->cb->remove(so);
+    }
     if (so->s_aux != -1) {
         closesocket(so->s_aux);
     }

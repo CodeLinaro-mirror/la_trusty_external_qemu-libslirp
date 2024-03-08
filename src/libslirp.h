@@ -47,6 +47,14 @@ typedef slirp_ssize_t (*SlirpWriteCb)(const void *buf, size_t len, void *opaque)
 typedef void (*SlirpTimerCb)(void *opaque);
 typedef int (*SlirpAddPollCb)(int fd, int events, void *opaque);
 typedef int (*SlirpGetREventsCb)(int idx, void *opaque);
+/* Type of a function that is invoked when the proxy connection
+* attempt has completed. On success, |fd| will be >= 0 and the
+* descriptor for the active socket to use, |af| will be either
+* AF_INET or AF_INET6. On failure |fd| will be negative.
+* |connect_opaque| is the user-provided pointer that was passed
+* to slirp_proxy_try_connect().
+*/
+typedef void (SlirpProxyConnectFunc)(void* connect_opaque, int fd, int af);
 
 typedef enum SlirpTimerId {
     SLIRP_TIMER_RA,
@@ -96,6 +104,23 @@ typedef struct SlirpCb {
     /* Create a new timer.  When the timer fires, the application passes
      * the SlirpTimerId and cb_opaque to slirp_handle_timer.  */
     void *(*timer_new_opaque)(SlirpTimerId id, void *cb_opaque, void *opaque);
+
+    /* Initiate a proxy connection to address |addr|. |connect_func| is the
+    * function that will be called to report the state of the connection,
+    * and |connect_opaque| will be its first parameter, and used to
+    * uniquely identify the connection (it should not be NULL).
+    * Returns false if this address cannot be proxifed, in which case
+    * a normal connection attempt should be performed. Return true
+    * otherwise. */
+    bool (*try_connect)(const struct sockaddr_storage *addr,
+                        SlirpProxyConnectFunc *connect_func,
+                        void *connect_opaque);
+
+    /* Remove a proxy connection that was previously started with
+    * a call to try_connect(). |connect_opaque| should be the same parameter
+    * as the one passed to the function. */
+    void (*remove)(void *connect_opaque);
+
 } SlirpCb;
 
 #define SLIRP_CONFIG_VERSION_MIN 1
@@ -158,6 +183,10 @@ typedef struct SlirpConfig {
      * retrieved through NC-SI.
      */
     uint8_t oob_eth_addr[6];
+    /*
+     * slirp will redirect traffic to http proxy. The default is false.
+     */
+    bool http_proxy_on;
 } SlirpConfig;
 
 /* Create a new instance of a slirp stack */

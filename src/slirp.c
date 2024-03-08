@@ -653,7 +653,6 @@ Slirp *slirp_new(const SlirpConfig *cfg, const SlirpCb *callbacks, void *opaque)
     slirp->if_mru = cfg->if_mru == 0 ? IF_MRU_DEFAULT : cfg->if_mru;
     slirp->disable_host_loopback = cfg->disable_host_loopback;
     slirp->enable_emu = cfg->enable_emu;
-
     if (cfg->version >= 2) {
         slirp->outbound_addr = cfg->outbound_addr;
         slirp->outbound_addr6 = cfg->outbound_addr6;
@@ -684,6 +683,12 @@ Slirp *slirp_new(const SlirpConfig *cfg, const SlirpCb *callbacks, void *opaque)
     } else {
         slirp->mfr_id = 0;
         memset(slirp->oob_eth_addr, 0, ETH_ALEN);
+    }
+
+    if (cfg->version >= 5) {
+        slirp->http_proxy_on = cfg->http_proxy_on;
+    } else {
+        slirp->http_proxy_on = false;
     }
 
     ip6_post_init(slirp);
