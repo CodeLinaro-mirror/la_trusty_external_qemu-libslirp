@@ -116,6 +116,8 @@ struct socket {
     0x200 /* If set, the SS_FACCEPTCONN socket will die after one accept */
 
 #define SS_PERSISTENT_MASK 0xf000 /* Unremovable state bits */
+#define SS_PROXIFIED        0x400   /* Socket is trying to connect through a proxy, only makes sense
+                       when SS_ISFCONNECTING is also set */
 #define SS_HOSTFWD 0x1000 /* Socket describes host->guest forwarding */
 #define SS_INCOMING \
     0x2000 /* Connection was initiated by a host on the internet */
