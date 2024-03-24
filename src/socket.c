@@ -958,7 +958,25 @@ void sofwdrain(struct socket *so)
 static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *sin)
 {
     if (!s->disable_dns && so->so_faddr.s_addr == s->vnameserver_addr.s_addr) {
-        return so->so_fport == htons(53) && get_dns_addr(&sin->sin_addr) >= 0;
+        if (so->so_fport != htons(53)) {
+            return false;
+        }
+        // Custom DNS takes precedence over system-provided DNS.
+        if (s->host_dns_count > 0) {
+            /* The implementation below is adapted from external/qemu/slirp/slirp.c */
+            uint32_t dns_base = ntohl(s->vnameserver_addr.s_addr);
+            uint32_t guest = ntohl(so->so_faddr.s_addr);
+            /* By default, dns_index will be evaluated to 0 so that
+             * we are picking the first element in host_dns. */
+            int dns_index = (int)(guest - dns_base);
+            if (dns_index < 0 || dns_index >= s->host_dns_count) {
+                return false;
+            }
+            *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
+            sin->sin_port = so->so_fport;
+            return true;
+        }
+        return get_dns_addr(&sin->sin_addr) >= 0;
     }
 
     if (so->so_faddr.s_addr == s->vhost_addr.s_addr ||
@@ -977,7 +995,40 @@ static bool sotranslate_out6(Slirp *s, struct socket *so, struct sockaddr_in6 *s
 {
     if (!s->disable_dns && in6_equal(&so->so_faddr6, &s->vnameserver_addr6)) {
         uint32_t scope_id;
-        if (so->so_fport == htons(53) && get_dns6_addr(&sin->sin6_addr, &scope_id) >= 0) {
+        if (s->host_dns_count > 0) {
+            /* The implementation below is adapted from external/qemu/slirp/slirp.c */
+            /* Map IPv6 addresses to guest IPv6 DNS addresses. In other words,
+             * the n-th IPv6 address in host_dns[] will be mapped from the
+             * n-th guest IPv6 DNS address. */
+            struct in6_addr dns_base = s->vnameserver_addr6;
+            int n, dns_index = -1;
+            for (n = 0; n < s->host_dns_count; ++n) {
+                if (s->host_dns[n].ss_family != AF_INET6) {
+                    continue;
+                }
+                if (in6_equal(&so->so_faddr6, &dns_base)) {
+                    dns_index = n;
+                    break;
+                }
+                /* Increment DNS Ipv6 address */
+                int offset = 15;
+                while (offset >= 0) {
+                    dns_base.s6_addr[offset]++;
+                    if (dns_base.s6_addr[offset] != 0) {
+                        break;
+                    }
+                    offset--;
+                }
+            }
+            if (dns_index < 0) {
+                return false;
+            }
+            *sin = *(struct sockaddr_in6 *)(&s->host_dns[dns_index]);
+            sin->sin6_port = so->so_fport6;
+            return true;
+        }
+
+        if (get_dns6_addr(&sin->sin6_addr, &scope_id) >= 0) {
             sin->sin6_scope_id = scope_id;
             return true;
         }
@@ -1011,6 +1062,30 @@ int sotranslate_out(struct socket *so, struct sockaddr_storage *addr)
     case AF_INET6:
         ok = sotranslate_out6(so->slirp, so, (struct sockaddr_in6 *)addr);
         break;
+    }
+
+    if (ok && G_UNLIKELY(slirp_debug & DBG_MISC)) {
+        void* sockaddr = NULL;
+        char temp[INET6_ADDRSTRLEN];
+        int port = 0;
+        int ipv4 = (addr->ss_family == AF_INET);
+        if (ipv4) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+            sockaddr = &sin->sin_addr;
+            port = ntohs(sin->sin_port);
+        } else {
+            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+            sockaddr = &sin6->sin6_addr;
+            port = ntohs(sin6->sin6_port);
+        }
+        if (inet_ntop(addr->ss_family, sockaddr, temp, sizeof(temp))) {
+            DEBUG_MISC("libslirp %s returns %d, "
+                "%s=%s:%d", ipv4 ? "sotranslate_out4" : "sotranslate_out6",
+                ok, ipv4 ? "addr.sin_addr.s_addr=" : "addr.sin_addr.s6_addr=",
+                temp, port);
+        } else {
+            DEBUG_MISC("libslirp sotranslate_out socket address to string conversion error.");
+        }
     }
 
     if (!ok) {
