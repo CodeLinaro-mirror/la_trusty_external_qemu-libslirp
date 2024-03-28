@@ -210,6 +210,11 @@ struct Slirp {
     struct sockaddr_in6 *outbound_addr6;
     bool disable_dns; /* slirp will not redirect/serve any DNS packet */
     bool http_proxy_on; /*slirp will redirect traffic to http proxy. The default is false.*/
+    /*
+     * customized DNS which takes precedence over system-provided DNS.
+     */
+    size_t host_dns_count;
+    struct sockaddr_storage host_dns[SLIRP_MAX_DNS_SERVERS];
 };
 
 void if_start(Slirp *);

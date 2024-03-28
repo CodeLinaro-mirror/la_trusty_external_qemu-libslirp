@@ -126,6 +126,8 @@ typedef struct SlirpCb {
 #define SLIRP_CONFIG_VERSION_MIN 1
 #define SLIRP_CONFIG_VERSION_MAX 5
 
+#define SLIRP_MAX_DNS_SERVERS 4
+
 typedef struct SlirpConfig {
     /* Version must be provided */
     uint32_t version;
@@ -187,6 +189,11 @@ typedef struct SlirpConfig {
      * slirp will redirect traffic to http proxy. The default is false.
      */
     bool http_proxy_on;
+    /*
+     * customized DNS which takes precedence over system-provided DNS.
+     */
+    size_t host_dns_count;
+    struct sockaddr_storage host_dns[SLIRP_MAX_DNS_SERVERS];
 } SlirpConfig;
 
 /* Create a new instance of a slirp stack */

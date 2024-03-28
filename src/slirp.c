@@ -680,15 +680,45 @@ Slirp *slirp_new(const SlirpConfig *cfg, const SlirpCb *callbacks, void *opaque)
     if (cfg->version >= 5) {
         slirp->mfr_id = cfg->mfr_id;
         memcpy(slirp->oob_eth_addr, cfg->oob_eth_addr, ETH_ALEN);
+        slirp->http_proxy_on = cfg->http_proxy_on;
+
+        slirp->host_dns_count = 0;
+        int n = 0;
+        for (n = 0; n < cfg->host_dns_count; ++n) {
+            switch (cfg->host_dns[n].ss_family) {
+            case AF_INET:
+            case AF_INET6:
+                if (slirp->host_dns_count < SLIRP_MAX_DNS_SERVERS) {
+                    slirp->host_dns[slirp->host_dns_count++] = cfg->host_dns[n];
+                    if (slirp_debug & DBG_MISC) {
+                        char temp[INET6_ADDRSTRLEN];
+                        void* addr = NULL;
+                        int af = cfg->host_dns[n].ss_family;
+                        if (af == AF_INET) {
+                            struct sockaddr_in *sin = (struct sockaddr_in *)(&cfg->host_dns[n]);
+                            addr = &sin->sin_addr;
+                        } else { // af == AF_INET6
+                            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)(&cfg->host_dns[n]);
+                            addr = &sin6->sin6_addr;
+                        }
+                        const char *res = inet_ntop(af, addr, temp, sizeof(temp));
+                        if (!res) {
+                            res = "  (string conversion error)";
+                        }
+                        DEBUG_MISC("libslirp set host DNS server: %s", res);
+                    }
+                }
+                break;
+            default:
+                /* Ignore this one */
+                ;
+            }
+        }
     } else {
         slirp->mfr_id = 0;
         memset(slirp->oob_eth_addr, 0, ETH_ALEN);
-    }
-
-    if (cfg->version >= 5) {
-        slirp->http_proxy_on = cfg->http_proxy_on;
-    } else {
         slirp->http_proxy_on = false;
+        slirp->host_dns_count = 0;
     }
 
     ip6_post_init(slirp);
