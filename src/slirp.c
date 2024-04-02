@@ -249,7 +249,10 @@ static void winsock_cleanup(void)
     WSACleanup();
 }
 
-#elif defined(__APPLE__)
+// Bug: b/329250148
+// res_getservers returns unreliable DNS address on certain corp network and it doesn't
+// well with libslirp and causes connectivity loss.
+#elif 0 && defined(__APPLE__)
 
 #include <resolv.h>
 
@@ -357,7 +360,6 @@ int get_dns6_addr(struct in6_addr *pdns6_addr, uint32_t *scope_id)
                                   sizeof(dns6_addr),
                                   scope_id, &dns6_scope_id, &dns6_addr_time);
 }
-
 #else // !defined(_WIN32) && !defined(__APPLE__)
 
 #if defined(__HAIKU__)
