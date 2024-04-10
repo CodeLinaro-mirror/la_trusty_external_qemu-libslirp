@@ -967,14 +967,15 @@ static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *si
             uint32_t dns_base = ntohl(s->vnameserver_addr.s_addr);
             uint32_t guest = ntohl(so->so_faddr.s_addr);
             /* By default, dns_index will be evaluated to 0 so that
-             * we are picking the first element in host_dns. */
-            int dns_index = (int)(guest - dns_base);
-            if (dns_index < 0 || dns_index >= s->host_dns_count) {
-                return false;
+             * we are picking the first element in host_dns which is IPv4. */
+            for (int dns_index = 0; dns_index < s->host_dns_count; ++dns_index) {
+                if (s->host_dns[dns_index].ss_family != AF_INET) {
+                    continue;
+                }
+                *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
+                sin->sin_port = so->so_fport;
+                return true;
             }
-            *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
-            sin->sin_port = so->so_fport;
-            return true;
         }
         return get_dns_addr(&sin->sin_addr) >= 0;
     }
