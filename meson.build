@@ -129,6 +129,10 @@ sources = [
   'src/vmstate.c',
 ]
 
+if host_system != 'windows'
+  sources += 'src/ip_icmp_ping.c'
+endif
+
 mapfile = 'src/libslirp.map'
 vflag = []
 vflag_test = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile)

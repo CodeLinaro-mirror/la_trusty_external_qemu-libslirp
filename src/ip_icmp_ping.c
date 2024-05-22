@@ -78,8 +78,6 @@ int ping_binary_recv(struct socket* so, struct ip* ip, struct icmp* icp) {
 
     int seq = -1, ttl = -1;
     char line[4096] = "";
-    char skip[4096] = "";
-    char skip2[4096] = "";
     while (fgets(line, sizeof(line), so->ping_pipe)) {
         char* p = strstr(line, "icmp_seq=");
         if (p != NULL) {
