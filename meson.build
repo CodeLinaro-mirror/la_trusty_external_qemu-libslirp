@@ -80,6 +80,10 @@ elif host_system == 'haiku'
   platform_deps += [
     cc.find_library('network')
   ]
+elif host_system == 'linux'
+  platform_deps += [
+    dependency('threads')
+  ]
 endif
 
 cargs = [
