@@ -128,7 +128,28 @@ void udp6_input(struct mbuf *m)
         icmp6_send_error(m, ICMP6_TIMXCEED, ICMP6_TIMXCEED_INTRANS);
         goto bad;
     }
-    setsockopt(so->s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hop_limit, sizeof(hop_limit));
+
+    /*
+     * Check for MULTICAST
+     */
+    if (IN6_IS_ADDR_MULTICAST(&ip->ip_dst)) {
+        setsockopt(so->s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hop_limit, sizeof(hop_limit));
+        if (!so->slirp->disable_host_loopback) {
+            DEBUG_MISC("multicast loopback enabled\n");
+            int loopback = 1;  // Enable loopback
+            if (setsockopt(so->s, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, (char *)&loopback, sizeof(loopback)) == -1) {
+                DEBUG_MISC(" multicast loop errno = %d-%s\n", errno, strerror(errno));
+            };
+        }
+        struct ipv6_mreq mreq;
+        mreq.ipv6mr_multiaddr = ip->ip_dst;       // Multicast group address
+        mreq.ipv6mr_interface = 0; // The default multicast interface is used when set 0.
+        if (setsockopt(so->s, IPPROTO_IPV6, IPV6_JOIN_GROUP, (char *)&mreq, sizeof(mreq)) == -1) {
+            DEBUG_MISC("multicast membership errno = %d-%s\n", errno, strerror(errno));
+        };
+    } else {
+        setsockopt(so->s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hop_limit, sizeof(hop_limit));
+    }
 
     /*
      * Now we sendto() the packet.
