@@ -220,30 +220,7 @@ void udp_input(register struct mbuf *m, int iphlen)
         icmp_send_error(m, ICMP_TIMXCEED, ICMP_TIMXCEED_INTRANS, 0, NULL);
         goto bad;
     }
-
-    /*
-     * Check for MULTICAST
-     */
-    if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
-      setsockopt(so->s, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
-      DEBUG_MISC("multicast");
-      if (!slirp->disable_host_loopback) {
-        DEBUG_MISC("multicast loopback enabled");
-        int loopback = 1;  // Enable loopback
-        if (setsockopt(so->s, IPPROTO_IP, IP_MULTICAST_LOOP, (char *)&loopback, sizeof(loopback)) == -1) {
-          DEBUG_MISC(" multicast loop errno = %d-%s", errno, strerror(errno));
-        };
-      }
-      struct ip_mreq mreq;
-      mreq.imr_multiaddr.s_addr = ip->ip_dst.s_addr;       // Multicast group address
-      mreq.imr_interface.s_addr = htonl(INADDR_ANY); // Interface to use
-      if (setsockopt(so->s, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&mreq, sizeof(mreq)) == -1) {
-        DEBUG_MISC(" multicast membership errno = %d-%s", errno, strerror(errno));
-      };
-    } else {
-      setsockopt(so->s, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
-    }
-
+    setsockopt(so->s, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
 
     /*
      * Now we sendto() the packet.
