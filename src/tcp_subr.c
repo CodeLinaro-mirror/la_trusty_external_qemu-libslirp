@@ -429,7 +429,7 @@ int tcp_fconnect(struct socket *so, unsigned short af)
     Slirp *slirp = so->slirp;
 
     if (slirp->http_proxy_on && slirp->cb->try_connect &&
-        slirp->cb->try_connect(&addr, tcp_on_proxy_connection, so)) {
+        slirp->cb->try_connect(&addr, tcp_on_proxy_connection, so, slirp->opaque)) {
         soisfconnecting(so);
         so->s = -1;
         so->so_state |= SS_PROXIFIED;

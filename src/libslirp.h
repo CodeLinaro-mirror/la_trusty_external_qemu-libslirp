@@ -114,12 +114,12 @@ typedef struct SlirpCb {
     * otherwise. */
     bool (*try_connect)(const struct sockaddr_storage *addr,
                         SlirpProxyConnectFunc *connect_func,
-                        void *connect_opaque);
+                        void *connect_opaque, void *opaque);
 
     /* Remove a proxy connection that was previously started with
     * a call to try_connect(). |connect_opaque| should be the same parameter
     * as the one passed to the function. */
-    void (*remove)(void *connect_opaque);
+    void (*remove)(void *connect_opaque, void *opaque);
 
 } SlirpCb;
 
