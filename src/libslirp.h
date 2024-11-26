@@ -271,7 +271,7 @@ void slirp_cleanup(Slirp *slirp);
 /* This is deprecated, use slirp_pollfds_fill_socket instead. */
 SLIRP_EXPORT
 void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
-                        SlirpAddPollCb add_poll, void *opaque) SLIRP_DEPRECATED;
+                        SlirpAddPollCb add_poll, void *opaque);
 
 /* This is called by the application when it is about to sleep through poll().
  * *timeout is set to the amount of virtual time (in ms) that the application intends to
