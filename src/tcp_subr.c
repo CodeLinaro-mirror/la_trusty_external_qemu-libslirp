@@ -415,7 +415,6 @@ static int socket_fallback(struct sockaddr_storage * addr, unsigned short type) 
     if (memcmp(&sin->sin_addr, &loopback_addr, sizeof(sin->sin_addr)))
       return s;
     s = slirp_socket(AF_INET6, type, 0);
-    g_warning("slirp_socket s = %d", s);
 
     if (s < 0)
       return s;
