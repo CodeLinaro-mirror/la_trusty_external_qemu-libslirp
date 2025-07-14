@@ -96,6 +96,8 @@ struct icmp6 {
     } icmp6_body;
 #define icmp6_err icmp6_body.error_body
 #define icmp6_echo icmp6_body.echo
+#define icmp6_id icmp6_body.echo.id
+#define icmp6_seq icmp6_body.echo.seq_num
 #define icmp6_nrs icmp6_body.ndp_rs
 #define icmp6_nra icmp6_body.ndp_ra
 #define icmp6_nns icmp6_body.ndp_ns
@@ -214,12 +216,31 @@ struct ndpopt {
 #define NDP_AdvPrefLifetime 14400
 #define NDP_AdvAutonomousFlag 1
 
+/* Called from slirp_new, but after other initialization */
 void icmp6_post_init(Slirp *slirp);
+
+/* Called from slirp_cleanup */
 void icmp6_cleanup(Slirp *slirp);
+
+/* Process an ICMPv6 packet from the guest */
 void icmp6_input(struct mbuf *);
+
+/* Send an ICMPv6 error related to the given packet, using the given ICMPv6 type and code, using the given source */
 void icmp6_forward_error(struct mbuf *m, uint8_t type, uint8_t code, struct in6_addr *src);
+
+/* Similar to icmp6_forward_error, but use the link-local address as source */
 void icmp6_send_error(struct mbuf *m, uint8_t type, uint8_t code);
+
+/* Forward the ICMP packet to the guest (probably a ping reply) */
+void icmp6_reflect(struct mbuf *);
+
+/* Handle ICMP data from the ICMP socket, and forward it to the guest (using so_m as reference) */
+void icmp6_receive(struct socket *so);
+
+/* Send a neighbour sollicitation, to resolve the given IPV6 address */
 void ndp_send_ns(Slirp *slirp, struct in6_addr addr);
+
+/* Timer handler for router advertisement, to send it and reschedule the timer */
 void ra_timer_handler(Slirp *slirp, void *unused);
 
 #endif

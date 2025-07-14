@@ -16,8 +16,8 @@ static void sofcantrcvmore(struct socket *so);
 static void sofcantsendmore(struct socket *so);
 
 struct socket *solookup(struct socket **last, struct socket *head,
-                        struct sockaddr_storage *lhost,
-                        struct sockaddr_storage *fhost)
+                        const struct sockaddr_storage *lhost,
+                        const struct sockaddr_storage *fhost)
 {
     struct socket *so = *last;
 
@@ -50,8 +50,8 @@ struct socket *socreate(Slirp *slirp, int type)
     memset(so, 0, sizeof(struct socket));
     so->so_type = type;
     so->so_state = SS_NOFDREF;
-    so->s = -1;
-    so->s_aux = -1;
+    so->s = SLIRP_INVALID_SOCKET;
+    so->s_aux = SLIRP_INVALID_SOCKET;
     so->slirp = slirp;
     so->pollfds_idx = -1;
 
@@ -61,17 +61,17 @@ struct socket *socreate(Slirp *slirp, int type)
 /*
  * Remove references to so from the given message queue.
  */
-static void soqfree(struct socket *so, struct slirp_quehead *qh)
+static void soqfree(const struct socket *so, struct slirp_quehead *qh)
 {
     struct mbuf *ifq;
 
     for (ifq = (struct mbuf *)qh->qh_link; (struct slirp_quehead *)ifq != qh;
-         ifq = ifq->ifq_next) {
-        if (ifq->ifq_so == so) {
+         ifq = ifq->m_next) {
+        if (ifq->m_so == so) {
             struct mbuf *ifm;
-            ifq->ifq_so = NULL;
-            for (ifm = ifq->ifs_next; ifm != ifq; ifm = ifm->ifs_next) {
-                ifm->ifq_so = NULL;
+            ifq->m_so = NULL;
+            for (ifm = ifq->m_nextpkt; ifm != ifq; ifm = ifm->m_nextpkt) {
+                ifm->m_so = NULL;
             }
         }
     }
@@ -84,7 +84,7 @@ void sofree(struct socket *so)
 {
     Slirp *slirp = so->slirp;
 
-    if (so->s_aux != -1) {
+    if (have_valid_socket(so->s_aux)) {
         closesocket(so->s_aux);
     }
 
@@ -585,6 +585,28 @@ void sorecvfrom(struct socket *so)
         }
         /* No need for this socket anymore, udp_detach it */
         udp_detach(so);
+    } else if (so->so_type == IPPROTO_ICMPV6) { /* This is a "ping" reply */
+        int len;
+
+        len = recvfrom(so->s, buff, 256, 0, (struct sockaddr *)&addr, &addrlen);
+        /* XXX Check if reply is "correct"? */
+
+        if (len == -1 || len == 0) {
+            uint8_t code = ICMP6_UNREACH_PORT;
+
+            if (errno == EHOSTUNREACH)
+                code = ICMP6_UNREACH_ADDRESS;
+            else if (errno == ENETUNREACH)
+                code = ICMP6_UNREACH_NO_ROUTE;
+
+            DEBUG_MISC(" udp icmp6 rx errno = %d-%s", errno, strerror(errno));
+            icmp6_send_error(so->so_m, ICMP_UNREACH, code);
+        } else {
+            icmp6_reflect(so->so_m);
+            so->so_m = NULL; /* Don't m_free() it again! */
+        }
+        /* No need for this socket anymore, udp_detach it */
+        udp_detach(so);
     } else { /* A "normal" UDP packet */
         struct mbuf *m;
         int len;
@@ -633,7 +655,7 @@ void sorecvfrom(struct socket *so)
                             &addrlen);
         DEBUG_MISC(" did recvfrom %d, errno = %d-%s", m->m_len, errno,
                    strerror(errno));
-        if (m->m_len < 0) {    	
+        if (m->m_len < 0) {
             if (errno == ENOTCONN) {
                 /*
                  * UDP socket got burnt, e.g. by suspend on iOS. Tear it down
@@ -770,6 +792,66 @@ int sosendto(struct socket *so, struct mbuf *m)
 }
 
 /*
+ * Dedicated sendto() function for v6 UDP.
+ * Added port forwarding.
+ */
+int sosendtoudp6(struct socket *so, struct mbuf *m, struct gfwd_list *head)
+{
+    int ret;
+    struct sockaddr_storage addr;
+    struct gfwd_list *p_fwd;
+
+    DEBUG_CALL("sosendtoudp6");
+    DEBUG_ARG("so = %p", so);
+    DEBUG_ARG("m = %p", m);
+
+    addr = so->fhost.ss;
+
+    /*
+     * Do IPv6 guest/outbound UDP forwarding.
+     * Make sure we check the protocol.
+     * The duplicated so->fhost.ss address is the one we care about,
+     * as it's the one being used in connect().
+     * If guest server address is [::], only check port.
+     * There is no need to check against vhost address as it was handled
+     * in udp6_input().
+     */
+    if (addr.ss_family == AF_INET6 && head) {
+        struct sockaddr_in6 *p_addr = (struct sockaddr_in6 *)&addr;
+        for (p_fwd = head; p_fwd; p_fwd = p_fwd->ex_next) {
+            if (p_fwd->ex_fport == p_addr->sin6_port &&
+                p_fwd->protocol == GFWD_UDP &&
+                (in6_equal(&p_fwd->ex_addr6, &in6addr_any) ||
+                 in6_equal(&p_addr->sin6_addr, &p_fwd->ex_addr6))) {
+                p_addr->sin6_addr = p_fwd->target_addr6;
+                p_addr->sin6_port = p_fwd->target_port;
+            }
+        }
+    }
+
+    DEBUG_CALL(" sendto()ing)");
+    if (sotranslate_out(so, &addr) < 0) {
+        return -1;
+    }
+
+    /* Don't care what port we get */
+    ret = sendto(so->s, m->m_data, m->m_len, 0, (struct sockaddr *)&addr,
+                 sockaddr_size(&addr));
+    if (ret < 0)
+        return -1;
+
+    /*
+     * Kill the socket if there's no reply in 4 minutes,
+     * but only if it's an expirable socket
+     */
+    if (so->so_expire)
+        so->so_expire = curtime + SO_EXPIRE;
+    so->so_state &= SS_PERSISTENT_MASK;
+    so->so_state |= SS_ISFCONNECTED; /* So that it gets select()ed */
+    return 0;
+}
+
+/*
  * Listen for incoming TCP connections
  * On failure errno contains the reason.
  */
@@ -779,7 +861,8 @@ struct socket *tcpx_listen(Slirp *slirp,
                            int flags)
 {
     struct socket *so;
-    int s, opt = 1;
+    slirp_os_socket s;
+    int opt = 1;
     socklen_t addrlen;
 
     DEBUG_CALL("tcpx_listen");
@@ -845,22 +928,19 @@ struct socket *tcpx_listen(Slirp *slirp,
     sockaddr_copy(&so->lhost.sa, sizeof(so->lhost), laddr, laddrlen);
 
     s = slirp_socket(haddr->sa_family, SOCK_STREAM, 0);
-    if ((s < 0) ||
+    if ((not_valid_socket(s)) ||
         (haddr->sa_family == AF_INET6 && slirp_socket_set_v6only(s, (flags & SS_HOSTFWD_V6ONLY) != 0) < 0) ||
         (slirp_socket_set_fast_reuse(s) < 0) ||
         (bind(s, haddr, haddrlen) < 0) ||
         (listen(s, 1) < 0)) {
         int tmperrno = errno; /* Don't clobber the real reason we failed */
-        if (s >= 0) {
+        if (have_valid_socket(s)) {
             closesocket(s);
         }
         sofree(so);
         /* Restore the real errno */
-#ifdef _WIN32
-        WSASetLastError(tmperrno);
-#else
         errno = tmperrno;
-#endif
+
         return NULL;
     }
     setsockopt(s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(int));
@@ -871,6 +951,8 @@ struct socket *tcpx_listen(Slirp *slirp,
     sotranslate_accept(so);
 
     so->s = s;
+    slirp_register_poll_socket(so);
+
     return so;
 }
 
@@ -939,10 +1021,6 @@ static void sofcantsendmore(struct socket *so)
     }
 }
 
-/*
- * Set write drain mode
- * Set CANTSENDMORE once all data has been write()n
- */
 void sofwdrain(struct socket *so)
 {
     if (so->so_rcv.sb_cc)
@@ -993,9 +1071,6 @@ static bool sotranslate_out6(Slirp *s, struct socket *so, struct sockaddr_in6 *s
 }
 
 
-/*
- * Translate addr in host addr when it is a virtual address
- */
 int sotranslate_out(struct socket *so, struct sockaddr_storage *addr)
 {
     bool ok = true;
@@ -1053,9 +1128,6 @@ void sotranslate_in(struct socket *so, struct sockaddr_storage *addr)
     }
 }
 
-/*
- * Translate connections from localhost to the real hostname
- */
 void sotranslate_accept(struct socket *so)
 {
     Slirp *slirp = so->slirp;
@@ -1081,7 +1153,7 @@ void sotranslate_accept(struct socket *so)
          * this source port by binding to port 0 so that the OS allocates a
          * port for us. If this fails, we fall back to choosing a random port
          * with a random number generator. */
-        int s;
+        slirp_os_socket s;
         struct sockaddr_in in_addr;
         struct sockaddr_in6 in6_addr;
         socklen_t in_addr_len;
@@ -1102,7 +1174,7 @@ void sotranslate_accept(struct socket *so)
                 g_assert_not_reached();
                 break;
             }
-            if (s < 0) {
+            if (not_valid_socket(s)) {
                 g_error("Ephemeral slirp_socket() allocation failed");
                 goto unix2inet_cont;
             }
@@ -1145,7 +1217,7 @@ unix2inet_cont:
                 g_assert_not_reached();
                 break;
             }
-            if (s < 0) {
+            if (not_valid_socket(s)) {
                 g_error("Ephemeral slirp_socket() allocation failed");
                 goto unix2inet6_cont;
             }

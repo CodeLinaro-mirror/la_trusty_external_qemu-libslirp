@@ -96,7 +96,7 @@ void udp6_input(struct mbuf *m)
     if (so == NULL) {
         /* If there's no socket for this packet, create one. */
         so = socreate(slirp, IPPROTO_UDP);
-        if (udp_attach(so, AF_INET6) == -1) {
+        if (not_valid_socket(udp_attach(so, AF_INET6))) {
             DEBUG_MISC(" udp6_attach errno = %d-%s", errno, strerror(errno));
             sofree(so);
             goto bad;
@@ -128,12 +128,12 @@ void udp6_input(struct mbuf *m)
         icmp6_send_error(m, ICMP6_TIMXCEED, ICMP6_TIMXCEED_INTRANS);
         goto bad;
     }
-    setsockopt(so->s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hop_limit, sizeof(hop_limit));
+    setsockopt(so->s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, (const void *) &hop_limit, sizeof(hop_limit));
 
     /*
      * Now we sendto() the packet.
      */
-    if (sosendto(so, m) == -1) {
+    if (sosendtoudp6(so, m, slirp->guestfwd_list) == -1) {
         m->m_len += iphlen;
         m->m_data -= iphlen;
         *ip = save_ip;
@@ -155,14 +155,15 @@ bad:
     m_free(m);
 }
 
-int udp6_output(struct socket *so, struct mbuf *m, struct sockaddr_in6 *saddr,
-                struct sockaddr_in6 *daddr)
+int udp6_output(struct socket *so, struct mbuf *m, const struct sockaddr_in6 *saddr,
+                const struct sockaddr_in6 *daddr)
 {
     Slirp *slirp = m->slirp;
     M_DUP_DEBUG(slirp, m, 0, sizeof(struct ip6) + sizeof(struct udphdr));
 
     struct ip6 *ip;
     struct udphdr *uh;
+    struct gfwd_list *ex_ptr;
 
     DEBUG_CALL("udp6_output");
     DEBUG_ARG("so = %p", so);
@@ -185,6 +186,26 @@ int udp6_output(struct socket *so, struct mbuf *m, struct sockaddr_in6 *saddr,
     /* Build UDP header */
     uh->uh_sport = saddr->sin6_port;
     uh->uh_dport = daddr->sin6_port;
+
+    /*
+     * Guestfwd response:
+     * Update the source address, if needed. As the guest APP might be expecting
+     * response from the paired address.
+     * The trick here is to use the original slirp socket's faddr (aka the
+     * original destination address) and port to be the source address and
+     * port, instead of the address and port in gfwd_list, as we can have
+     * in6addr_any as our ex_addr6.
+     */
+
+    for (ex_ptr = slirp->guestfwd_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
+        if (ex_ptr->target_port == saddr->sin6_port &&
+            ex_ptr->protocol == GFWD_UDP &&
+            in6_equal(&ex_ptr->target_addr6, &saddr->sin6_addr)) {
+            ip->ip_src = so->so_faddr6;
+            uh->uh_sport = so->so_fport6;
+        }
+    }
+
     uh->uh_ulen = ip->ip_pl;
     uh->uh_sum = 0;
     uh->uh_sum = ip6_cksum(m);

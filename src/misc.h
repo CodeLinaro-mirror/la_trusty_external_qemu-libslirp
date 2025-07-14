@@ -8,11 +8,30 @@
 
 #include "libslirp.h"
 
+enum GFwdProtocols {
+    GFWD_TCP = 1,
+    GFWD_UDP = 2,
+    GFWD_MAX = 3, /* Invalid */
+};
+
 struct gfwd_list {
     SlirpWriteCb write_cb;
     void *opaque;
-    struct in_addr ex_addr; /* Server address */
+    union {
+        struct in_addr ex_addr; /* IPv4 Server address */
+        struct in6_addr ex_addr6; /* IPv6 Server address */
+    } ip_body;
+#define ex_addr6 ip_body.ex_addr6
+#define ex_addr ip_body.ex_addr
+    union {
+        struct in_addr target_addr; /* IPv4 Destination address */
+        struct in6_addr target_addr6; /* IPv6 Destination address */
+    } target_ip_body;
+#define target_addr6 target_ip_body.target_addr6
+#define target_addr target_ip_body.target_addr
     int ex_fport; /* Port to telnet to */
+    int target_port; /* Port to forward to on host side */
+    enum GFwdProtocols protocol; /* Port forwarding protocol */
     char *ex_exec; /* Command line of what to exec */
     char *ex_unix; /* unix socket */
     struct gfwd_list *ex_next;
@@ -51,22 +70,47 @@ struct slirp_quehead {
     struct slirp_quehead *qh_rlink;
 };
 
-void slirp_insque(void *, void *);
-void slirp_remque(void *);
+/* Insert element a into queue b */
+void slirp_insque(void *a, void *b);
+
+/* Remove element a from its queue */
+void slirp_remque(void *a);
+
+/* Run the given command in the background, and expose its output as a socket */
 int fork_exec(struct socket *so, const char *ex);
+
+/* Create a Unix socket, and expose it as a socket */
 int open_unix(struct socket *so, const char *unixsock);
 
+/* Add a guest forward on the given address and port, with guest data being
+ * forwarded by calling write_cb */
 struct gfwd_list *add_guestfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
                                void *opaque, struct in_addr addr, int port);
 
+/* Add a IPv6 guest forward on the given address and port, with guest data being
+ * forwarded by calling write_cb */
+struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
+                                struct in6_addr *server_addr, int server_port,
+                                struct in6_addr *destination_addr,
+                                int destination_port, int protocol);
+
+/* Run the given command in the backaground, and send its output to the guest on
+ * the given address and port */
 struct gfwd_list *add_exec(struct gfwd_list **ex_ptr, const char *cmdline,
                            struct in_addr addr, int port);
 
+/* Create a Unix socket, and expose it to the guest on the given address and
+ * port */
 struct gfwd_list *add_unix(struct gfwd_list **ex_ptr, const char *unixsock,
                            struct in_addr addr, int port);
 
+/* Remove the guest forward bound to the given address and port */
 int remove_guestfwd(struct gfwd_list **ex_ptr, struct in_addr addr, int port);
 
+/* Remove the IPv6 guest forward bound to the given address and port */
+int remove_guestxfwd(struct gfwd_list **ex_ptr, struct in6_addr *addr, int port);
+
+/* Bind the socket to the outbound address specified in the slirp configuration */
 int slirp_bind_outbound(struct socket *so, unsigned short af);
 
 #endif

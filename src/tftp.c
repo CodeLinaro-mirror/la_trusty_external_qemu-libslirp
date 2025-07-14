@@ -29,6 +29,11 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#if defined(_WIN32)
+#include <io.h>
+#include <share.h>
+#endif
+
 static inline int tftp_session_in_use(struct tftp_session *spt)
 {
     return (spt->slirp != NULL);
@@ -102,6 +107,20 @@ static int tftp_session_find(Slirp *slirp, struct sockaddr_storage *srcsas,
     }
 
     return -1;
+}
+
+void tftp_cleanup(Slirp *slirp)
+{
+    struct tftp_session *spt;
+    int k;
+
+    for (k = 0; k < TFTP_SESSIONS_MAX; k++) {
+        spt = &slirp->tftp_sessions[k];
+
+        if (tftp_session_in_use(spt)) {
+            tftp_session_terminate(spt);
+        }
+    }
 }
 
 static int tftp_read_data(struct tftp_session *spt, uint32_t block_nr,
@@ -248,11 +267,11 @@ static void tftp_send_next_block(struct tftp_session *spt,
                              spt->block_size);
 
     if (nobytes < 0) {
-        m_free(m);
-
         /* send "file not found" error back */
 
         tftp_send_error(spt, 1, "File not found", tp);
+
+        m_free(m);
 
         return;
     }
@@ -283,13 +302,13 @@ static void tftp_handle_rrq(Slirp *slirp, struct sockaddr_storage *srcsas,
 
     /* check if a session already exists and if so terminate it */
     s = tftp_session_find(slirp, srcsas, &tp->hdr);
-    if (s >= 0) {
+    if (have_valid_socket(s)) {
         tftp_session_terminate(&slirp->tftp_sessions[s]);
     }
 
     s = tftp_session_allocate(slirp, srcsas, &tp->hdr);
 
-    if (s < 0) {
+    if (not_valid_socket(s)) {
         return;
     }
 
@@ -423,7 +442,7 @@ static void tftp_handle_ack(Slirp *slirp, struct sockaddr_storage *srcsas,
 
     s = tftp_session_find(slirp, srcsas, hdr);
 
-    if (s < 0) {
+    if (not_valid_socket(s)) {
         return;
     }
 
@@ -437,7 +456,7 @@ static void tftp_handle_error(Slirp *slirp, struct sockaddr_storage *srcsas,
 
     s = tftp_session_find(slirp, srcsas, hdr);
 
-    if (s < 0) {
+    if (not_valid_socket(s)) {
         return;
     }
 

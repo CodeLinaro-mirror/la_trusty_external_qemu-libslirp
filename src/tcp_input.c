@@ -38,6 +38,7 @@
 
 #include "slirp.h"
 #include "ip_icmp.h"
+#include "ip6.h"
 
 #define TCPREXMTTHRESH 3
 
@@ -50,30 +51,10 @@
 /*
  * Insert segment ti into reassembly queue of tcp with
  * control block tp.  Return TH_FIN if reassembly now includes
- * a segment with FIN.  The macro form does the common case inline
- * (segment is the next to be received on an established connection,
- * and the queue is empty), avoiding linkage into and removal
- * from the queue and repetition of various conversions.
+ * a segment with FIN.
  * Set DELACK for segments received in order, but ack immediately
  * when segments are out of order (so fast retransmit can work).
  */
-#define TCP_REASS(tp, ti, m, so, flags)                                \
-    {                                                                  \
-        if ((ti)->ti_seq == (tp)->rcv_nxt && tcpfrag_list_empty(tp) && \
-            (tp)->t_state == TCPS_ESTABLISHED) {                       \
-            tp->t_flags |= TF_DELACK;                                  \
-            (tp)->rcv_nxt += (ti)->ti_len;                             \
-            flags = (ti)->ti_flags & TH_FIN;                           \
-            if (so->so_emu) {                                          \
-                if (tcp_emu((so), (m)))                                \
-                    sbappend(so, (m));                                 \
-            } else                                                     \
-                sbappend((so), (m));                                   \
-        } else {                                                       \
-            (flags) = tcp_reass((tp), (ti), (m));                      \
-            tp->t_flags |= TF_ACKNOW;                                  \
-        }                                                              \
-    }
 
 static void tcp_dooptions(struct tcpcb *tp, uint8_t *cp, int cnt,
                           struct tcpiphdr *ti);
@@ -182,7 +163,7 @@ present:
             } else
                 sbappend(so, m);
         }
-    } while (ti != (struct tcpiphdr *)tp && ti->ti_seq == tp->rcv_nxt);
+    } while (!tcpfrag_list_end(ti, tp) && ti->ti_seq == tp->rcv_nxt);
     return (flags);
 }
 
@@ -239,11 +220,11 @@ void tcp_input(struct mbuf *m, int iphlen, struct socket *inso,
     switch (af) {
     case AF_INET:
         M_DUP_DEBUG(slirp, m, 0,
-            sizeof(struct tcpiphdr) - sizeof(struct ip) - sizeof(struct tcphdr));
+            sizeof(struct qlink) + sizeof(struct tcpiphdr) - sizeof(struct ip) - sizeof(struct tcphdr));
         break;
     case AF_INET6:
         M_DUP_DEBUG(slirp, m, 0,
-            sizeof(struct tcpiphdr) - sizeof(struct ip6) - sizeof(struct tcphdr));
+            sizeof(struct qlink) + sizeof(struct tcpiphdr) - sizeof(struct ip6) - sizeof(struct tcphdr));
         break;
     }
 
@@ -253,7 +234,7 @@ void tcp_input(struct mbuf *m, int iphlen, struct socket *inso,
     switch (af) {
     case AF_INET:
         if (iphlen > sizeof(struct ip)) {
-            ip_stripoptions(m, (struct mbuf *)0);
+            ip_stripoptions(m);
             iphlen = sizeof(struct ip);
         }
         /* XXX Check if too short */
@@ -399,7 +380,6 @@ findso:
      * as if it was LISTENING, and continue...
      */
     if (so == NULL) {
-        /* TODO: IPv6 */
         if (slirp->restricted) {
             /* Any hostfwds will have an existing socket, so we only get here
              * for non-hostfwd connections. These should be dropped, unless it
@@ -408,7 +388,8 @@ findso:
             for (ex_ptr = slirp->guestfwd_list; ex_ptr;
                  ex_ptr = ex_ptr->ex_next) {
                 if (ex_ptr->ex_fport == ti->ti_dport &&
-                    ti->ti_dst.s_addr == ex_ptr->ex_addr.s_addr) {
+                    (af == AF_INET6 ? in6_equal(&ti->ti_dst6, &ex_ptr->ex_addr6) :
+                    ti->ti_dst.s_addr == ex_ptr->ex_addr.s_addr)) {
                     break;
                 }
             }
@@ -616,7 +597,6 @@ findso:
          * If this is destined for the control address, then flag to
          * tcp_ctl once connected, otherwise connect
          */
-        /* TODO: IPv6 */
         if (af == AF_INET &&
             (so->so_faddr.s_addr & slirp->vnetwork_mask.s_addr) ==
                 slirp->vnetwork_addr.s_addr) {
@@ -638,12 +618,13 @@ findso:
             /* CTL_ALIAS: Do nothing, tcp_fconnect will be called on it */
         }
 
+        /* IPv6 guestfwd is done in tcp_fconnect() */
+
         if (so->so_emu & EMU_NOCONNECT) {
             so->so_emu &= ~EMU_NOCONNECT;
             goto cont_input;
         }
-
-        if ((tcp_fconnect(so, so->so_ffamily) == -1) && (errno != EAGAIN) &&
+        if ((tcp_fconnect(so, so->so_ffamily, slirp->guestfwd_list) == -1) && (errno != EAGAIN) &&
             (errno != EINPROGRESS) && (errno != EWOULDBLOCK)) {
             uint8_t code;
             DEBUG_MISC(" tcp fconnect errno = %d-%s", errno, strerror(errno));
@@ -761,6 +742,13 @@ findso:
      *	continue processing rest of data/controls, beginning with URG
      */
     case TCPS_SYN_SENT:
+        if (getenv("SLIRP_FUZZING") &&
+            /* Align seq numbers on what the fuzzing trace says */
+            tp->iss == 1 && ti->ti_ack != 0) {
+            tp->iss = ti->ti_ack - 1;
+            tp->snd_max = tp->iss + 1;
+        }
+
         if ((tiflags & TH_ACK) &&
             (SEQ_LEQ(ti->ti_ack, tp->iss) || SEQ_GT(ti->ti_ack, tp->snd_max)))
             goto dropwithreset;
@@ -961,6 +949,13 @@ findso:
      * send an RST.  una<=ack<=max
      */
     case TCPS_SYN_RECEIVED:
+        if (getenv("SLIRP_FUZZING") &&
+            /* Align seq numbers on what the fuzzing trace says */
+            tp->iss == 1 && ti->ti_ack != 0) {
+            tp->iss = ti->ti_ack - 1;
+            tp->snd_max = tp->iss + 1;
+            tp->snd_una = ti->ti_ack;
+        }
 
         if (SEQ_GT(tp->snd_una, ti->ti_ack) || SEQ_GT(ti->ti_ack, tp->snd_max))
             goto dropwithreset;
@@ -1274,7 +1269,27 @@ dodata:
      */
     if ((ti->ti_len || (tiflags & TH_FIN)) &&
         TCPS_HAVERCVDFIN(tp->t_state) == 0) {
-        TCP_REASS(tp, ti, m, so, tiflags);
+
+        /*
+         * segment is the next to be received on an established
+         * connection, and the queue is empty, avoid linkage into and
+         * removal from the queue and repetition of various
+         * conversions from tcp_reass().
+         */
+        if (ti->ti_seq == tp->rcv_nxt && tcpfrag_list_empty(tp) &&
+            tp->t_state == TCPS_ESTABLISHED) {
+            tp->t_flags |= TF_DELACK;
+            tp->rcv_nxt += ti->ti_len;
+            tiflags = ti->ti_flags & TH_FIN;
+            if (so->so_emu) {
+                if (tcp_emu(so, m))
+                    sbappend(so, m);
+            } else
+                sbappend(so, m);
+        } else {
+            tiflags = tcp_reass(tp, ti, m);
+            tp->t_flags |= TF_ACKNOW;
+        }
     } else {
         m_free(m);
         tiflags &= ~TH_FIN;

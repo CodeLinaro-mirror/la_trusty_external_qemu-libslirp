@@ -27,7 +27,50 @@ void slirp_remque(void *a)
     element->qh_rlink = NULL;
 }
 
-/* TODO: IPv6 */
+static enum GFwdProtocols parse_protocol(int protocol) {
+    switch (protocol) {
+        case 1: return GFWD_TCP;
+        case 2: return GFWD_UDP;
+        default: return GFWD_MAX;
+    }
+}
+
+struct gfwd_list *add_guestxfwd(struct gfwd_list **ex_ptr,
+                                struct in6_addr *server_addr, int server_port,
+                                struct in6_addr *destination_addr,
+                                int destination_port, int protocol)
+{
+    struct gfwd_list *f = g_new0(struct gfwd_list, 1);
+    char addrstr[INET6_ADDRSTRLEN];
+
+    DEBUG_CALL("add_guestxfwd");
+
+    inet_ntop(AF_INET6, server_addr, addrstr, INET6_ADDRSTRLEN);
+
+    DEBUG_ARG("server ip: [%s]:%d", addrstr, ntohs(server_port));
+
+    inet_ntop(AF_INET6, destination_addr, addrstr, INET6_ADDRSTRLEN);
+
+    DEBUG_ARG("target ip: [%s]:%d", addrstr, ntohs(destination_port));
+
+    /* We don't care about the chardev backend. */
+    f->write_cb = NULL;
+    f->opaque = NULL;
+
+    /* Set server and target addresses and ports */
+    f->ex_fport = server_port;
+    f->ex_addr6 = *server_addr;
+    f->target_addr6 = *destination_addr;
+    f->target_port = destination_port;
+
+    f->protocol = parse_protocol(protocol);
+
+    f->ex_next = *ex_ptr;
+    *ex_ptr = f;
+
+    return f;
+}
+
 struct gfwd_list *add_guestfwd(struct gfwd_list **ex_ptr, SlirpWriteCb write_cb,
                                void *opaque, struct in_addr addr, int port)
 {
@@ -63,6 +106,20 @@ struct gfwd_list *add_unix(struct gfwd_list **ex_ptr, const char *unixsock,
     return f;
 }
 
+int remove_guestxfwd(struct gfwd_list **ex_ptr, struct in6_addr *addr, int port)
+{
+    for (; *ex_ptr != NULL; ex_ptr = &((*ex_ptr)->ex_next)) {
+        struct gfwd_list *f = *ex_ptr;
+        if (in6_equal(&f->ex_addr6, addr) && f->ex_fport == port) {
+            *ex_ptr = f->ex_next;
+            g_free(f->ex_exec);
+            g_free(f);
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int remove_guestfwd(struct gfwd_list **ex_ptr, struct in_addr addr, int port)
 {
     for (; *ex_ptr != NULL; ex_ptr = &((*ex_ptr)->ex_next)) {
@@ -77,7 +134,7 @@ int remove_guestfwd(struct gfwd_list **ex_ptr, struct in_addr addr, int port)
     return -1;
 }
 
-static int slirp_socketpair_with_oob(int sv[2])
+static int slirp_socketpair_with_oob(slirp_os_socket sv[2])
 {
     struct sockaddr_in addr = {
         .sin_family = AF_INET,
@@ -85,18 +142,19 @@ static int slirp_socketpair_with_oob(int sv[2])
         .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
     };
     socklen_t addrlen = sizeof(addr);
-    int ret, s;
+    int ret;
+    slirp_os_socket s;
 
-    sv[1] = -1;
+    sv[1] = SLIRP_INVALID_SOCKET;
     s = slirp_socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0 || bind(s, (struct sockaddr *)&addr, addrlen) < 0 ||
+    if (not_valid_socket(s) || bind(s, (struct sockaddr *)&addr, addrlen) < 0 ||
         listen(s, 1) < 0 ||
         getsockname(s, (struct sockaddr *)&addr, &addrlen) < 0) {
         goto err;
     }
 
     sv[1] = slirp_socket(AF_INET, SOCK_STREAM, 0);
-    if (sv[1] < 0) {
+    if (not_valid_socket(sv[1])) {
         goto err;
     }
     /*
@@ -123,7 +181,7 @@ static int slirp_socketpair_with_oob(int sv[2])
 
 err:
     g_critical("slirp_socketpair(): %s", strerror(errno));
-    if (s >= 0) {
+    if (have_valid_socket(s)) {
         closesocket(s);
     }
     if (sv[1] >= 0) {
@@ -144,6 +202,10 @@ static void fork_exec_child_setup(gpointer data)
 
     /* POSIX is obnoxious about SIGCHLD specifically across exec() */
     signal(SIGCHLD, SIG_DFL);
+#else
+#ifdef GLIB_UNUSED_PARAM
+    GLIB_UNUSED_PARAM(data);
+#endif
 #endif
 }
 
@@ -209,7 +271,8 @@ int fork_exec(struct socket *so, const char *ex)
     GError *err = NULL;
     gint argc = 0;
     gchar **argv = NULL;
-    int opt, sp[2];
+    int opt;
+    slirp_os_socket sp[2];
 
     DEBUG_CALL("fork_exec");
     DEBUG_ARG("so = %p", so);
@@ -243,9 +306,9 @@ int fork_exec(struct socket *so, const char *ex)
     closesocket(sp[1]);
     slirp_socket_set_fast_reuse(so->s);
     opt = 1;
-    setsockopt(so->s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(int));
+    setsockopt(so->s, SOL_SOCKET, SO_OOBINLINE, (const void *) &opt, sizeof(int));
     slirp_set_nonblock(so->s);
-    so->slirp->cb->register_poll_fd(so->s, so->slirp->opaque);
+    slirp_register_poll_socket(so);
     return 1;
 }
 
@@ -267,7 +330,7 @@ int open_unix(struct socket *so, const char *unixpath)
     }
 
     s = slirp_socket(PF_UNIX, SOCK_STREAM, 0);
-    if (s < 0) {
+    if (not_valid_socket(s)) {
         g_critical("open_unix(): %s", strerror(errno));
         return 0;
     }
@@ -280,14 +343,19 @@ int open_unix(struct socket *so, const char *unixpath)
 
     so->s = s;
     slirp_set_nonblock(so->s);
-    so->slirp->cb->register_poll_fd(so->s, so->slirp->opaque);
+    slirp_register_poll_socket(so);
 
     return 1;
 #else
+#ifdef GLIB_UNUSED_PARAM
+    GLIB_UNUSED_PARAM(so);
+    GLIB_UNUSED_PARAM(unixpath);
+#endif
     g_assert_not_reached();
 #endif
 }
 
+SLIRP_EXPORT
 char *slirp_connection_info(Slirp *slirp)
 {
     GString *str = g_string_new(NULL);
@@ -334,7 +402,7 @@ char *slirp_connection_info(Slirp *slirp)
             dst_port = so->so_fport;
         }
         slirp_fmt0(buf, sizeof(buf), "  TCP[%s]", state);
-        g_string_append_printf(str, "%-19s %3d %15s %5d ", buf, so->s,
+        g_string_append_printf(str, "%-19s %3"SLIRP_PRIfd" %15s %5d ", buf, so->s,
                                src.sin_addr.s_addr ?
                                inet_ntop(AF_INET, &src.sin_addr, addr, sizeof(addr)) : "*",
                                ntohs(src.sin_port));
@@ -359,7 +427,7 @@ char *slirp_connection_info(Slirp *slirp)
             dst_addr = so->so_faddr;
             dst_port = so->so_fport;
         }
-        g_string_append_printf(str, "%-19s %3d %15s %5d ", buf, so->s,
+        g_string_append_printf(str, "%-19s %3"SLIRP_PRIfd" %15s %5d ", buf, so->s,
                                src.sin_addr.s_addr ?
                                inet_ntop(AF_INET, &src.sin_addr, addr, sizeof(addr)) : "*",
                                ntohs(src.sin_port));
@@ -374,7 +442,7 @@ char *slirp_connection_info(Slirp *slirp)
                    (so->so_expire - curtime) / 1000);
         src.sin_addr = so->so_laddr;
         dst_addr = so->so_faddr;
-        g_string_append_printf(str, "%-19s %3d %15s  -    ", buf, so->s,
+        g_string_append_printf(str, "%-19s %3"SLIRP_PRIfd" %15s  -    ", buf, so->s,
                                src.sin_addr.s_addr ?
                                inet_ntop(AF_INET, &src.sin_addr, addr, sizeof(addr)) : "*");
         g_string_append_printf(str, "%15s  -    %5d %5d\n",
@@ -385,6 +453,7 @@ char *slirp_connection_info(Slirp *slirp)
     return g_string_free(str, FALSE);
 }
 
+SLIRP_EXPORT
 char *slirp_neighbor_info(Slirp *slirp)
 {
     GString *str = g_string_new(NULL);
@@ -430,7 +499,7 @@ char *slirp_neighbor_info(Slirp *slirp)
 int slirp_bind_outbound(struct socket *so, unsigned short af)
 {
     int ret = 0;
-    struct sockaddr *addr = NULL;
+    const struct sockaddr *addr = NULL;
     int addr_size = 0;
 
     if (af == AF_INET && so->slirp->outbound_addr != NULL) {

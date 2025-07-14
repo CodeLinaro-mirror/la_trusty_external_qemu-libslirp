@@ -103,11 +103,11 @@ struct mbuf {
     char m_dat[];
 };
 
-#define ifq_prev m_prev
-#define ifq_next m_next
-#define ifs_prev m_prevpkt
-#define ifs_next m_nextpkt
-#define ifq_so m_so
+static inline void ifs_remque(struct mbuf *ifm)
+{
+    ifm->m_prevpkt->m_nextpkt = ifm->m_nextpkt;
+    ifm->m_nextpkt->m_prevpkt = ifm->m_prevpkt;
+}
 
 #define M_EXT 0x01 /* m_ext points to more (malloced) data */
 #define M_FREELIST 0x02 /* mbuf is on free list */
@@ -116,22 +116,55 @@ struct mbuf {
     0x08 /* when m_free is called on the mbuf, free() \
           * it rather than putting it on the free list */
 
+/* Called by slirp_new */
 void m_init(Slirp *);
+
+/* Called by slirp_cleanup */
 void m_cleanup(Slirp *slirp);
+
+/* Allocate an mbuf */
 struct mbuf *m_get(Slirp *);
+
+/* Release an mbuf (put possibly put it in allocation cache */
 void m_free(struct mbuf *);
-void m_cat(register struct mbuf *, register struct mbuf *);
+
+/* Catenate the second buffer to the end of the first buffer, and release the second */
+void m_cat(struct mbuf *, struct mbuf *);
+
+/* Grow the mbuf to the given size */
 void m_inc(struct mbuf *, int);
-void m_adj(struct mbuf *, int);
-int m_copy(struct mbuf *, struct mbuf *, int, int);
+
+/* If len is positive, trim that amount from the head of the mbuf. If it is negative, trim it from the tail of the mbuf */
+void m_adj(struct mbuf *, int len);
+
+/* Copy len bytes from the first buffer at the given offset, to the end of the second buffer */
+int m_copy(struct mbuf *, struct mbuf *, int off, int len);
+
+/*
+ * Duplicate the mbuf
+ *
+ * copy_header specifies whether the bytes before m_data should also be copied.
+ * header_size specifies how many bytes are to be reserved before m_data.
+ */
 struct mbuf *m_dup(Slirp *slirp, struct mbuf *m, bool copy_header, size_t header_size);
+
+/*
+ * Given a pointer into an mbuf, return the mbuf
+ * XXX This is a kludge, I should eliminate the need for it
+ * Fortunately, it's not used often
+ */
 struct mbuf *dtom(Slirp *, void *);
+
+/* Check that the mbuf contains at least len bytes, and return the data */
 void *mtod_check(struct mbuf *, size_t len);
+
+/* Return the end of the data of the mbuf */
 void *m_end(struct mbuf *);
 
+/* Initialize the ifs queue of the mbuf */
 static inline void ifs_init(struct mbuf *ifm)
 {
-    ifm->ifs_next = ifm->ifs_prev = ifm;
+    ifm->m_nextpkt = ifm->m_prevpkt = ifm;
 }
 
 #ifdef SLIRP_DEBUG

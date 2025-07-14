@@ -8,11 +8,16 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
 #include <ws2tcpip.h>
 #include <in6addr.h>
 #include <basetsd.h>
+#include <errno.h>
+
 typedef SSIZE_T slirp_ssize_t;
-#ifdef BUILDING_LIBSLIRP
+#ifdef LIBSLIRP_STATIC
+# define SLIRP_EXPORT
+#elif defined(BUILDING_LIBSLIRP)
 # define SLIRP_EXPORT __declspec(dllexport)
 #else
 # define SLIRP_EXPORT __declspec(dllimport)
@@ -31,6 +36,34 @@ typedef ssize_t slirp_ssize_t;
 extern "C" {
 #endif
 
+#ifdef __GNUC__
+#define SLIRP_DEPRECATED __attribute__((__deprecated__))
+#else
+#define SLIRP_DEPRECATED
+#endif
+
+/* Socket abstraction:*/
+
+#if !defined(_WIN32)
+/* Traditional Unix socket. */
+typedef int slirp_os_socket;
+#define SLIRP_INVALID_SOCKET (-1)
+#define SLIRP_PRIfd "d"
+#else
+/* Windows: Win64 is a LLP64 platform, sizeof(int) < sizeof(long long) == sizeof(void *).
+ *
+ * Windows likes to pass HANDLE types around, which are pointers (aka unsigned long longs),
+ * which cannot be represented as ints. And, MS, in its infinite wisdom, decided to use
+ * a SOCKET handle instead of an int for socket library calls. */
+typedef SOCKET slirp_os_socket;
+#define SLIRP_INVALID_SOCKET INVALID_SOCKET
+#if defined(_WIN64)
+# define SLIRP_PRIfd "llx"
+#else
+# define SLIRP_PRIfd "x"
+#endif
+#endif
+
 /* Opaque structure containing the slirp state */
 typedef struct Slirp Slirp;
 
@@ -43,12 +76,29 @@ enum {
     SLIRP_POLL_HUP = 1 << 4,
 };
 
+/* Debugging flags. */
+enum {
+    SLIRP_DBG_CALL         = 1 << 0,
+    SLIRP_DBG_MISC         = 1 << 1,
+    SLIRP_DBG_ERROR        = 1 << 2,
+    SLIRP_DBG_TFTP         = 1 << 3,
+    SLIRP_DBG_VERBOSE_CALL = 1 << 4,
+};
+
+/* Callback for application to get data from the guest */
 typedef slirp_ssize_t (*SlirpReadCb)(void *buf, size_t len, void *opaque);
+/* Callback for application to send data to the guest */
 typedef slirp_ssize_t (*SlirpWriteCb)(const void *buf, size_t len, void *opaque);
+/* Timer callback */
 typedef void (*SlirpTimerCb)(void *opaque);
+/* This is deprecated, use SlirpAddPollSocketCb instead */
 typedef int (*SlirpAddPollCb)(int fd, int events, void *opaque);
+/* Callback for libslirp to register polling callbacks */
+typedef int (*SlirpAddPollSocketCb)(slirp_os_socket fd, int events, void *opaque);
+/* Callback for libslirp to get polling result */
 typedef int (*SlirpGetREventsCb)(int idx, void *opaque);
 
+/* For now libslirp creates only a timer for the IPv6 RA */
 typedef enum SlirpTimerId {
     SLIRP_TIMER_RA,
     SLIRP_TIMER_NUM,
@@ -80,10 +130,10 @@ typedef struct SlirpCb {
     void (*timer_free)(void *timer, void *opaque);
     /* Modify a timer to expire at @expire_time (ms) */
     void (*timer_mod)(void *timer, int64_t expire_time, void *opaque);
-    /* Register a fd for future polling */
-    void (*register_poll_fd)(int fd, void *opaque);
-    /* Unregister a fd */
-    void (*unregister_poll_fd)(int fd, void *opaque);
+    /* Deprecated, use register_poll_socket instead */
+    void (*register_poll_fd)(int fd, void *opaque) SLIRP_DEPRECATED;
+    /* Deprecated, use unregister_poll_socket instead */
+    void (*unregister_poll_fd)(int fd, void *opaque) SLIRP_DEPRECATED;
     /* Kick the io-thread, to signal that new events may be processed because some TCP buffer
      * can now receive more data, i.e. slirp_socket_can_recv will return 1. */
     void (*notify)(void *opaque);
@@ -97,10 +147,18 @@ typedef struct SlirpCb {
     /* Create a new timer.  When the timer fires, the application passes
      * the SlirpTimerId and cb_opaque to slirp_handle_timer.  */
     void *(*timer_new_opaque)(SlirpTimerId id, void *cb_opaque, void *opaque);
+
+    /*
+     * Fields introduced in SlirpConfig version 6 begin
+     */
+    /* Register a socket for future polling */
+    void (*register_poll_socket)(slirp_os_socket socket, void *opaque);
+    /* Unregister a socket */
+    void (*unregister_poll_socket)(slirp_os_socket socket, void *opaque);
 } SlirpCb;
 
 #define SLIRP_CONFIG_VERSION_MIN 1
-#define SLIRP_CONFIG_VERSION_MAX 5
+#define SLIRP_CONFIG_VERSION_MAX 6
 
 typedef struct SlirpConfig {
     /* Version must be provided */
@@ -108,26 +166,46 @@ typedef struct SlirpConfig {
     /*
      * Fields introduced in SlirpConfig version 1 begin
      */
+    /* Whether to prevent the guest from accessing the Internet */
     int restricted;
+    /* Whether IPv4 is enabled */
     bool in_enabled;
+    /* Virtual network for the guest */
     struct in_addr vnetwork;
+    /* Mask for the virtual network for the guest */
     struct in_addr vnetmask;
+    /* Virtual address for the host exposed to the guest */
     struct in_addr vhost;
+    /* Whether IPv6 is enabled */
     bool in6_enabled;
+    /* Virtual IPv6 network for the guest */
     struct in6_addr vprefix_addr6;
+    /* Len of the virtual IPv6 network for the guest */
     uint8_t vprefix_len;
+    /* Virtual address for the host exposed to the guest */
     struct in6_addr vhost6;
+    /* Hostname exposed to the guest in DHCP hostname option */
     const char *vhostname;
+    /* Hostname exposed to the guest in the DHCP TFTP server name option */
     const char *tftp_server_name;
+    /* Path of the files served by TFTP */
     const char *tftp_path;
+    /* Boot file name exposed to the guest via DHCP */
     const char *bootfile;
+    /* Start of the DHCP range */
     struct in_addr vdhcp_start;
+    /* Virtual address for the DNS server exposed to the guest */
     struct in_addr vnameserver;
+    /* Virtual IPv6 address for the DNS server exposed to the guest */
     struct in6_addr vnameserver6;
+    /* DNS search names exposed to the guest via DHCP */
     const char **vdnssearch;
+    /* Domain name exposed to the guest via DHCP */
     const char *vdomainname;
+    /* MTU when sending packets to the guest */
     /* Default: IF_MTU_DEFAULT */
     size_t if_mtu;
+    /* MRU when receiving packets from the guest */
     /* Default: IF_MRU_DEFAULT */
     size_t if_mru;
     /* Prohibit connecting to 127.0.0.1:* */
@@ -137,23 +215,32 @@ typedef struct SlirpConfig {
      * recommended to enable it)
      */
     bool enable_emu;
+
     /*
      * Fields introduced in SlirpConfig version 2 begin
      */
+    /* Address to be used when sending data to the Internet */
     struct sockaddr_in *outbound_addr;
+    /* IPv6 Address to be used when sending data to the Internet */
     struct sockaddr_in6 *outbound_addr6;
+
     /*
      * Fields introduced in SlirpConfig version 3 begin
      */
-    bool disable_dns;  /* slirp will not redirect/serve any DNS packet */
+    /* slirp will not redirect/serve any DNS packet */
+    bool disable_dns;
+
     /*
      * Fields introduced in SlirpConfig version 4 begin
      */
-    bool disable_dhcp; /* slirp will not reply to any DHCP requests */
+    /* slirp will not reply to any DHCP requests */
+    bool disable_dhcp;
+
     /*
      * Fields introduced in SlirpConfig version 5 begin
      */
-    uint32_t mfr_id; /* Manufacturer ID (IANA Private Enterprise number) */
+    /* Manufacturer ID (IANA Private Enterprise number) */
+    uint32_t mfr_id;
     /*
      * MAC address allocated for an out-of-band management controller, to be
      * retrieved through NC-SI.
@@ -181,6 +268,11 @@ Slirp *slirp_init(int restricted, bool in_enabled, struct in_addr vnetwork,
 SLIRP_EXPORT
 void slirp_cleanup(Slirp *slirp);
 
+/* This is deprecated, use slirp_pollfds_fill_socket instead. */
+SLIRP_EXPORT
+void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
+                        SlirpAddPollCb add_poll, void *opaque);
+
 /* This is called by the application when it is about to sleep through poll().
  * *timeout is set to the amount of virtual time (in ms) that the application intends to
  * wait (UINT32_MAX if infinite). slirp_pollfds_fill updates it according to
@@ -189,8 +281,8 @@ void slirp_cleanup(Slirp *slirp);
  * that should be monitored along the sleep. The opaque pointer is passed as
  * such to add_poll, and add_poll returns an index. */
 SLIRP_EXPORT
-void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
-                        SlirpAddPollCb add_poll, void *opaque);
+void slirp_pollfds_fill_socket(Slirp *slirp, uint32_t *timeout,
+                        SlirpAddPollSocketCb add_poll, void *opaque);
 
 /* This is called by the application after sleeping, to report which file
  * descriptors are available. slirp_pollfds_poll calls get_revents on each file
@@ -214,7 +306,10 @@ SLIRP_EXPORT
 void slirp_handle_timer(Slirp *slirp, SlirpTimerId id, void *cb_opaque);
 
 /* These set up / remove port forwarding between a host port in the real world
- * and the guest network. */
+ * and the guest network.
+ * Note: guest_addr must be in network order, while guest_port must be in host
+ * order.
+ */
 SLIRP_EXPORT
 int slirp_add_hostfwd(Slirp *slirp, int is_udp, struct in_addr host_addr,
                       int host_port, struct in_addr guest_addr, int guest_port);
@@ -253,11 +348,20 @@ int slirp_add_guestfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
 /* TODO: rather identify a guestfwd through an opaque pointer instead of through
  * the guest_addr */
 
+/* Set up port forwarding between a port in the guest network and a
+ * callback that will receive the data coming from the port for IPv6 address.
+ * This function will be enabled after UDP v6 port forwarding feature is done.
+ */
+int slirp_add_guestxfwd(Slirp *slirp, struct in6_addr *server_addr,
+                        int server_port, struct in6_addr *destination_addr,
+                        int destination_port, int protocol);
+
 /* This is called by the application for a guestfwd, to determine how much data
  * can be received by the forwarded port through a call to slirp_socket_recv. */
 SLIRP_EXPORT
 size_t slirp_socket_can_recv(Slirp *slirp, struct in_addr guest_addr,
                              int guest_port);
+
 /* This is called by the application for a guestfwd, to provide the data to be
  * sent on the forwarded port */
 SLIRP_EXPORT
@@ -267,6 +371,11 @@ void slirp_socket_recv(Slirp *slirp, struct in_addr guest_addr, int guest_port,
 /* Remove entries added by slirp_add_exec, slirp_add_unix or slirp_add_guestfwd */
 SLIRP_EXPORT
 int slirp_remove_guestfwd(Slirp *slirp, struct in_addr guest_addr,
+                          int guest_port);
+
+/* Remove entries added by slirp_add_x_exec, slirp_x_unix or slirp_add_guestxfwd */
+/* Used by IPv6 guestfwd */
+int slirp_remove_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
                           int guest_port);
 
 /* Return a human-readable state of the slirp stack */
@@ -296,6 +405,33 @@ int slirp_state_load(Slirp *s, int version_id, SlirpReadCb read_cb,
 /* Return the version of the slirp implementation */
 SLIRP_EXPORT
 const char *slirp_version_string(void);
+
+/* Debugging support: There are two methods for enabling debugging
+ * in libslirp: the SLIRP_DEBUG environment variable and the
+ * slirp_(set|reset)_debug() functions.
+ *
+ * SLIRP_DEBUG is a list of debug options separated by colons, spaces
+ * or commas. Valid debug options are 'call', 'misc', 'error', 'tftp'
+ * and 'verbose_call'.
+ */
+
+/* Set debugging flags independently of the SLIRP_DEBUG environment
+ * variable. */
+SLIRP_EXPORT 
+void slirp_set_debug(unsigned int flags);
+
+/* Reset debugging flags. */
+SLIRP_EXPORT
+void slirp_reset_debug(unsigned int flags);
+
+#if defined(_WIN32)
+/* Windows utility functions: */
+
+/* inet_aton() replacement that uses inet_pton(). Eliminates the dreaded
+ * winsock2 deprecation messages. */
+SLIRP_EXPORT
+int slirp_inet_aton(const char *cp, struct in_addr *ia);
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */

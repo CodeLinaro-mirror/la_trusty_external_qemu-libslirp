@@ -34,6 +34,10 @@
 #include "slirp.h"
 #include "ip_icmp.h"
 
+#ifndef _WIN32
+#include <sys/param.h>
+#endif
+
 #ifndef WITH_ICMP_ERROR_MSG
 #define WITH_ICMP_ERROR_MSG 0
 #endif
@@ -83,12 +87,11 @@ void icmp_cleanup(Slirp *slirp)
     }
 }
 
+/* Send ICMP packet to the Internet, and save it to so_m */
 static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
 {
     Slirp *slirp = m->slirp;
-    M_DUP_DEBUG(slirp, m, 0, 0);
 
-    struct ip *ip = mtod(m, struct ip *);
     struct sockaddr_in addr;
 
     /*
@@ -100,14 +103,14 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
      * isn't possible to detect this difference at runtime, so we must use an
      * #ifdef to determine if we need to remove the IP header.
      */
-#ifdef CONFIG_BSD
+#if defined(BSD) && !defined(__GNU__)
     so->so_type = IPPROTO_IP;
 #else
     so->so_type = IPPROTO_ICMP;
 #endif
 
     so->s = slirp_socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
-    if (so->s == -1) {
+    if (not_valid_socket(so->s)) {
         if (errno == EAFNOSUPPORT
          || errno == EPROTONOSUPPORT
          || errno == EACCES) {
@@ -116,7 +119,7 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
             so->s = slirp_socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
         }
     }
-    if (so->s == -1) {
+    if (not_valid_socket(so->s)) {
 #ifndef WIN32
         int res = ping_binary_send(so, m, hlen);
         if (res != 0)
@@ -125,14 +128,17 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
         return -1;
 #endif
     }
-    so->slirp->cb->register_poll_fd(so->s, so->slirp->opaque);
+    slirp_register_poll_socket(so);
 
     if (slirp_bind_outbound(so, AF_INET) != 0) {
         // bind failed - close socket
         closesocket(so->s);
-        so->s = -1;
+        so->s = SLIRP_INVALID_SOCKET;
         return -1;
     }
+
+    M_DUP_DEBUG(slirp, m, 0, 0);
+    struct ip *ip = mtod(m, struct ip *);
 
     so->so_m = m;
     so->so_faddr = ip->ip_dst;
@@ -164,7 +170,7 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
 
 void icmp_detach(struct socket *so)
 {
-    so->slirp->cb->unregister_poll_fd(so->s, so->slirp->opaque);
+    slirp_unregister_poll_socket(so);
 #ifndef WIN32
     if (so->ping_pipe != NULL)
         ping_binary_close(so);
@@ -234,7 +240,7 @@ void icmp_input(struct mbuf *m, int hlen)
             /* We could not send this as ICMP, try to send it on UDP echo
              * service (7), wishfully hoping that it is open there. */
 
-            if (udp_attach(so, AF_INET) == -1) {
+            if (not_valid_socket(udp_attach(so, AF_INET))) {
                 DEBUG_MISC("icmp_input udp_attach errno = %d-%s", errno,
                            strerror(errno));
                 sofree(so);
@@ -341,7 +347,7 @@ void icmp_forward_error(struct mbuf *msrc, uint8_t type, uint8_t code, int minsi
     if (!msrc)
         goto end_error;
     ip = mtod(msrc, struct ip *);
-    if (slirp_debug & DBG_MISC) {
+    if (slirp_debug & SLIRP_DBG_MISC) {
         char addr_src[INET_ADDRSTRLEN];
         char addr_dst[INET_ADDRSTRLEN];
 
@@ -353,7 +359,7 @@ void icmp_forward_error(struct mbuf *msrc, uint8_t type, uint8_t code, int minsi
         goto end_error; /* Only reply to fragment 0 */
 
     /* Do not reply to source-only IPs */
-    if ((ip->ip_src.s_addr & htonl(~(0xf << 28))) == 0) {
+    if ((ip->ip_src.s_addr & htonl(~(0xfu << 28))) == 0) {
         goto end_error;
     }
 

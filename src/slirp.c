@@ -23,6 +23,13 @@
  * THE SOFTWARE.
  */
 #include "slirp.h"
+#include "ip6.h"
+#include "misc.h"
+#include <netinet/in.h>
+
+#ifndef g_warning_once
+#define g_warning_once g_warning
+#endif
 
 
 #ifndef _WIN32
@@ -65,7 +72,7 @@ static const struct in6_addr SITE_LOCAL_DNS_BROADCAST_ADDRS[] = {
 
 #endif
 
-int slirp_debug;
+unsigned int slirp_debug;
 
 /* Define to 1 if you want KEEPALIVE timers */
 bool slirp_do_keepalive;
@@ -310,7 +317,7 @@ static int get_dns_addr_libresolv(int af, void *pdns_addr, void *cached_addr,
         if (found > 3) {
             DEBUG_MISC("  (more)");
             break;
-        } else if (slirp_debug & DBG_MISC) {
+        } else if (slirp_debug & SLIRP_DBG_MISC) {
             char s[INET6_ADDRSTRLEN];
             const char *res = inet_ntop(af, addr, s, sizeof(s));
             if (!res) {
@@ -419,7 +426,7 @@ static bool try_and_setdns_server(int af, unsigned found, unsigned if_index,
 
     if (found > 2) {
 	DEBUG_MISC("  (more)");
-    } else if (slirp_debug & DBG_MISC) {
+    } else if (slirp_debug & SLIRP_DBG_MISC) {
 	char s[INET6_ADDRSTRLEN];
 	const char *res = inet_ntop(af, &tmp_addr, s, sizeof(s));
 	if (!res) {
@@ -547,11 +554,11 @@ static void slirp_init_once(void)
     debug = g_getenv("SLIRP_DEBUG");
     if (debug) {
         const GDebugKey keys[] = {
-            { "call", DBG_CALL },
-            { "misc", DBG_MISC },
-            { "error", DBG_ERROR },
-            { "tftp", DBG_TFTP },
-            { "verbose_call", DBG_VERBOSE_CALL },
+            { "call", SLIRP_DBG_CALL },
+            { "misc", SLIRP_DBG_MISC },
+            { "error", SLIRP_DBG_ERROR },
+            { "tftp", SLIRP_DBG_TFTP },
+            { "verbose_call", SLIRP_DBG_VERBOSE_CALL },
         };
         slirp_debug = g_parse_debug_string(debug, keys, G_N_ELEMENTS(keys));
     }
@@ -739,6 +746,7 @@ void slirp_cleanup(Slirp *slirp)
     ip_cleanup(slirp);
     ip6_cleanup(slirp);
     m_cleanup(slirp);
+    tftp_cleanup(slirp);
 
     g_rand_free(slirp->grand);
 
@@ -777,8 +785,8 @@ static void slirp_update_timeout(Slirp *slirp, uint32_t *timeout)
     *timeout = t;
 }
 
-void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
-                        SlirpAddPollCb add_poll, void *opaque)
+void slirp_pollfds_fill_socket(Slirp *slirp, uint32_t *timeout,
+                               SlirpAddPollSocketCb add_poll, void *opaque)
 {
     struct socket *so, *so_next;
 
@@ -811,7 +819,7 @@ void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
          * NOFDREF can include still connecting to local-host,
          * newly socreated() sockets etc. Don't want to select these.
          */
-        if (so->so_state & SS_NOFDREF || so->s == -1) {
+        if (so->so_state & SS_NOFDREF || not_valid_socket(so->s)) {
             continue;
         }
 
@@ -924,13 +932,79 @@ void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
     slirp_update_timeout(slirp, timeout);
 }
 
+struct PollCbWrap {
+    SlirpAddPollCb add_poll;
+    void *opaque;
+};
+
+static int slirp_pollfds_fill_wrap(slirp_os_socket socket, int events, void *opaque)
+{
+    struct PollCbWrap *wrap = opaque;
+    int fd = (int) socket;
+    if ((slirp_os_socket) fd != socket)
+        g_warning_once("Truncating socket to int failed!");
+    return wrap->add_poll(fd, events, wrap->opaque);
+}
+
+void slirp_pollfds_fill(Slirp *slirp, uint32_t *timeout,
+                        SlirpAddPollCb add_poll, void *opaque)
+{
+    struct PollCbWrap wrap = {
+        .add_poll = add_poll,
+        .opaque = opaque,
+    };
+    slirp_pollfds_fill_socket(slirp, timeout, slirp_pollfds_fill_wrap, &wrap);
+}
+
+void slirp_register_poll_socket(struct socket *so)
+{
+    Slirp *slirp = so->slirp;
+    int fd;
+    if (slirp->cfg_version >= 6 && slirp->cb->register_poll_socket) {
+        slirp->cb->register_poll_socket(so->s, slirp->opaque);
+    } else {
+        fd = (int) so->s;
+        if ((slirp_os_socket) fd != so->s)
+            g_warning_once("Truncating socket to int failed!");
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        slirp->cb->register_poll_fd(fd, slirp->opaque);
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+    }
+}
+
+void slirp_unregister_poll_socket(struct socket *so)
+{
+    Slirp *slirp = so->slirp;
+    int fd;
+    if (slirp->cfg_version >= 6 && slirp->cb->unregister_poll_socket) {
+        slirp->cb->unregister_poll_socket(so->s, slirp->opaque);
+    } else {
+        fd = (int) so->s;
+        if ((slirp_os_socket) fd != so->s)
+            g_warning_once("Truncating socket to int failed!");
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        slirp->cb->unregister_poll_fd(fd, slirp->opaque);
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+    }
+}
+
 void slirp_pollfds_poll(Slirp *slirp, int select_error,
                         SlirpGetREventsCb get_revents, void *opaque)
 {
     struct socket *so, *so_next;
     int ret;
 
-    curtime = slirp->cb->clock_get_ns(slirp->opaque) / SCALE_MS;
+    curtime = (unsigned int) (slirp->cb->clock_get_ns(slirp->opaque) / SCALE_MS);
 
     /*
      * See if anything has timed out
@@ -964,7 +1038,7 @@ void slirp_pollfds_poll(Slirp *slirp, int select_error,
                 revents = get_revents(so->pollfds_idx, opaque);
             }
 
-            if (so->so_state & SS_NOFDREF || so->s == -1) {
+            if (so->so_state & SS_NOFDREF || not_valid_socket(so->s)) {
                 continue;
             }
 
@@ -1073,7 +1147,7 @@ void slirp_pollfds_poll(Slirp *slirp, int select_error,
                 revents = get_revents(so->pollfds_idx, opaque);
             }
 
-            if (so->s != -1 &&
+            if (have_valid_socket(so->s) &&
                 (revents & (SLIRP_POLL_IN | SLIRP_POLL_HUP | SLIRP_POLL_ERR))) {
                 sorecvfrom(so);
             }
@@ -1092,9 +1166,12 @@ void slirp_pollfds_poll(Slirp *slirp, int select_error,
                 revents = get_revents(so->pollfds_idx, opaque);
             }
 
-            if (so->s != -1 &&
+            if (have_valid_socket(so->s) &&
                 (revents & (SLIRP_POLL_IN | SLIRP_POLL_HUP | SLIRP_POLL_ERR))) {
-                icmp_receive(so);
+                if (so->so_type == IPPROTO_IPV6 || so->so_type == IPPROTO_ICMPV6)
+                    icmp6_receive(so);
+                else
+                    icmp_receive(so);
             }
         }
     }
@@ -1134,7 +1211,7 @@ static void arp_input(Slirp *slirp, const uint8_t *pkt, int pkt_len)
             if (ah->ar_tip == slirp->vnameserver_addr.s_addr ||
                 ah->ar_tip == slirp->vhost_addr.s_addr)
                 goto arp_ok;
-            /* TODO: IPv6 */
+
             for (ex_ptr = slirp->guestfwd_list; ex_ptr;
                  ex_ptr = ex_ptr->ex_next) {
                 if (ex_ptr->ex_addr.s_addr == ah->ar_tip)
@@ -1363,7 +1440,7 @@ int slirp_remove_hostfwd(Slirp *slirp, int is_udp, struct in_addr host_addr,
             addr.sin_family == AF_INET &&
             addr.sin_addr.s_addr == host_addr.s_addr &&
             addr.sin_port == port) {
-            so->slirp->cb->unregister_poll_fd(so->s, so->slirp->opaque);
+            slirp_unregister_poll_socket(so);
             closesocket(so->s);
             sofree(so);
             return 0;
@@ -1405,7 +1482,7 @@ int slirp_remove_hostxfwd(Slirp *slirp,
         if ((so->so_state & SS_HOSTFWD) &&
             getsockname(so->s, (struct sockaddr *)&addr, &addr_len) == 0 &&
             sockaddr_equal(&addr, (const struct sockaddr_storage *) haddr)) {
-            so->slirp->cb->unregister_poll_fd(so->s, so->slirp->opaque);
+            slirp_unregister_poll_socket(so);
             closesocket(so->s);
             sofree(so);
             return 0;
@@ -1468,7 +1545,6 @@ int slirp_add_hostxfwd(Slirp *slirp,
     return 0;
 }
 
-/* TODO: IPv6 */
 static bool check_guestfwd(Slirp *slirp, struct in_addr *guest_addr,
                            int guest_port)
 {
@@ -1490,6 +1566,38 @@ static bool check_guestfwd(Slirp *slirp, struct in_addr *guest_addr,
         if (guest_port == tmp_ptr->ex_fport &&
             guest_addr->s_addr == tmp_ptr->ex_addr.s_addr)
             return false;
+    }
+
+    return true;
+}
+
+static bool check_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
+                            int guest_port)
+{
+    struct gfwd_list *tmp_ptr;
+
+    /*
+     * We can assign a random server address in the same subnet for it,
+     * but for now, let's reject empty address.
+     */
+    if (!guest_addr) {
+        return false;
+    }
+
+    /*
+     * The original address check requires the server address to be under the
+     * same subnet/prefix of the QEMU network, otherwise it won't be added into
+     * the gfwd_list.
+     * Remove all these checks since we want to forward random addresses to
+     * host (most likely).
+     */
+
+    /* Check if it's "bound" */
+    for (tmp_ptr = slirp->guestfwd_list; tmp_ptr; tmp_ptr = tmp_ptr->ex_next) {
+        if (guest_port == tmp_ptr->ex_fport &&
+            in6_equal(guest_addr, &tmp_ptr->ex_addr6)) {
+                return false;
+            }
     }
 
     return true;
@@ -1534,6 +1642,19 @@ int slirp_add_guestfwd(Slirp *slirp, SlirpWriteCb write_cb, void *opaque,
     return 0;
 }
 
+int slirp_add_guestxfwd(Slirp *slirp, struct in6_addr *server_addr,
+                        int server_port, struct in6_addr *destination_addr,
+                        int destination_port, int protocol)
+{
+    if (!check_guestxfwd(slirp, server_addr, server_port)) {
+        return -1;
+    }
+
+    add_guestxfwd(&slirp->guestfwd_list, server_addr, htons(server_port),
+                  destination_addr, htons(destination_port), protocol);
+    return 0;
+}
+
 int slirp_remove_guestfwd(Slirp *slirp, struct in_addr guest_addr,
                           int guest_port)
 {
@@ -1541,16 +1662,23 @@ int slirp_remove_guestfwd(Slirp *slirp, struct in_addr guest_addr,
                            htons(guest_port));
 }
 
+int slirp_remove_guestxfwd(Slirp *slirp, struct in6_addr *guest_addr,
+                          int guest_port)
+{
+    return remove_guestxfwd(&slirp->guestfwd_list, guest_addr,
+                           htons(guest_port));
+}
+
 slirp_ssize_t slirp_send(struct socket *so, const void *buf, size_t len, int flags)
 {
-    if (so->s == -1 && so->guestfwd) {
+    if (not_valid_socket(so->s) && so->guestfwd) {
         /* XXX this blocks entire thread. Rewrite to use
          * qemu_chr_fe_write and background I/O callbacks */
         so->guestfwd->write_cb(buf, len, so->guestfwd->opaque);
         return len;
     }
 
-    if (so->s == -1) {
+    if (not_valid_socket(so->s)) {
         /*
          * This should in theory not happen but it is hard to be
          * sure because some code paths will end up with so->s == -1
@@ -1569,7 +1697,6 @@ struct socket *slirp_find_ctl_socket(Slirp *slirp, struct in_addr guest_addr,
 {
     struct socket *so;
 
-    /* TODO: IPv6 */
     for (so = slirp->tcb.so_next; so != &slirp->tcb; so = so->so_next) {
         if (so->so_faddr.s_addr == guest_addr.s_addr &&
             htons(so->so_fport) == guest_port) {
@@ -1617,7 +1744,17 @@ void slirp_socket_recv(Slirp *slirp, struct in_addr guest_addr, int guest_port,
 
 void slirp_send_packet_all(Slirp *slirp, const void *buf, size_t len)
 {
-    slirp_ssize_t ret = slirp->cb->send_packet(buf, len, slirp->opaque);
+    slirp_ssize_t ret;
+
+    if (len < ETH_MINLEN) {
+        char tmp[ETH_MINLEN];
+        memcpy(tmp, buf, len);
+        memset(tmp + len, 0, ETH_MINLEN - len);
+
+        ret = slirp->cb->send_packet(tmp, ETH_MINLEN, slirp->opaque);
+    } else {
+        ret = slirp->cb->send_packet(buf, len, slirp->opaque);
+    }
 
     if (ret < 0) {
         g_critical("Failed to send packet, ret: %ld", (long)ret);
