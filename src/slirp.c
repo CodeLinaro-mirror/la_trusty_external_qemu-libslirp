@@ -25,7 +25,6 @@
 #include "slirp.h"
 #include "ip6.h"
 #include "misc.h"
-#include <netinet/in.h>
 
 #ifndef g_warning_once
 #define g_warning_once g_warning
@@ -34,6 +33,7 @@
 
 #ifndef _WIN32
 #include <net/if.h>
+#include <netinet/in.h>
 #endif
 
 /* https://gitlab.freedesktop.org/slirp/libslirp/issues/18 */
