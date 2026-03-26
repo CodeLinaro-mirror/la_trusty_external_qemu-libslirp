@@ -957,42 +957,27 @@ void sofwdrain(struct socket *so)
 
 static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *sin)
 {
-    if (!s->disable_dns) {
-        uint32_t dns_base = ntohl(s->vnameserver_addr.s_addr);
-        uint32_t faddr = ntohl(so->so_faddr.s_addr);
-        int dns_index = -1;
-
-        /* Mapping guest virtual DNS IPs (10.0.2.3, 10.0.2.4, etc.) to host DNS servers */
+    if (!s->disable_dns && so->so_faddr.s_addr == s->vnameserver_addr.s_addr) {
+        if (so->so_fport != htons(53)) {
+            return false;
+        }
+        // Custom DNS takes precedence over system-provided DNS.
         if (s->host_dns_count > 0) {
-            int n, ipv4_dns_count = 0;
-            for (n = 0; n < s->host_dns_count; ++n) {
-                if (s->host_dns[n].ss_family != AF_INET) {
+            /* The implementation below is adapted from external/qemu/slirp/slirp.c */
+            uint32_t dns_base = ntohl(s->vnameserver_addr.s_addr);
+            uint32_t guest = ntohl(so->so_faddr.s_addr);
+            /* By default, dns_index will be evaluated to 0 so that
+             * we are picking the first element in host_dns which is IPv4. */
+            for (int dns_index = 0; dns_index < s->host_dns_count; ++dns_index) {
+                if (s->host_dns[dns_index].ss_family != AF_INET) {
                     continue;
                 }
-                if (faddr == dns_base + ipv4_dns_count) {
-                    dns_index = n;
-                    break;
-                }
-                ipv4_dns_count++;
-                if (ipv4_dns_count >= SLIRP_MAX_DNS_SERVERS) {
-                    break;
-                }
-            }
-        } else if (faddr == dns_base) {
-            dns_index = 0;
-        }
-
-        if (dns_index >= 0) {
-            if (so->so_fport != htons(53)) {
-                return false;
-            }
-            if (s->host_dns_count > 0) {
                 *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
                 sin->sin_port = so->so_fport;
                 return true;
             }
-            return get_dns_addr(&sin->sin_addr) >= 0;
         }
+        return get_dns_addr(&sin->sin_addr) >= 0;
     }
 
     if (so->so_faddr.s_addr == s->vhost_addr.s_addr ||
