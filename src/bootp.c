@@ -282,9 +282,30 @@ static void bootp_reply(Slirp *slirp,
             q += 4;
 
             *q++ = RFC1533_DNS;
-            *q++ = 4;
-            memcpy(q, &slirp->vnameserver_addr, 4);
-            q += 4;
+            int ipv4_dns_count = slirp->ipv4_dns_count;
+
+            /* Check if there is room for the length byte and at least one 4-byte
+             * IPv4 address. */
+            if (q + 1 + 4 > end) {
+                /* Not enough room; back out the DNS tag. */
+                q--;
+                g_warning("DHCP packet size too small, omitting DNS servers.");
+            } else {
+                /* Limit the number of advertised DNS servers if mapping them all
+                 * would exceed the remaining DHCP packet buffer space. */
+                if (q + 1 + 4 * ipv4_dns_count > end) {
+                    g_warning("DHCP packet size exceeded, omitting some DNS servers.");
+                    ipv4_dns_count = (end - q - 1) / 4;
+                }
+
+                *q++ = 4 * ipv4_dns_count;
+                for (int i = 0; i < ipv4_dns_count; i++) {
+                    struct in_addr dns_addr = slirp->vnameserver_addr;
+                    dns_addr.s_addr = htonl(ntohl(dns_addr.s_addr) + i);
+                    memcpy(q, &dns_addr, 4);
+                    q += 4;
+                }
+            }
         }
 
         *q++ = RFC2132_LEASE_TIME;
