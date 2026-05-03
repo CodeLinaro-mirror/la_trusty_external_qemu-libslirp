@@ -34,7 +34,7 @@ if get_option('static') == true
   add_global_arguments('-static', language : 'c')
 endif
 
-if cc.get_argument_syntax() != 'msvc'
+if cc.get_argument_syntax() != 'msvc' and host_machine.system() != 'windows'
   r = run_command('build-aux/git-version-gen',
                   '@0@/.tarball-version'.format(meson.current_source_dir()),
                   check : false)
