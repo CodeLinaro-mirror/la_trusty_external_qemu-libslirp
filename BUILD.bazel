@@ -22,12 +22,21 @@ expand_template(
     name = "slirp_version_header",
     out = "src/libslirp-version.h",
     substitutions = {
-        "@SLIRP_MAJOR_VERSION@": "",
-        "@SLIRP_MINOR_VERSION@": "",
-        "@SLIRP_MICRO_VERSION@": "",
-        "@SLIRP_VERSION_STRING@": "\"4.7.0\"",
+        "@SLIRP_MAJOR_VERSION@": "4",
+        "@SLIRP_MINOR_VERSION@": "8",
+        "@SLIRP_MICRO_VERSION@": "0",
+        "@SLIRP_VERSION_STRING@": "\"4.8.0\"",
     },
     template = "src/libslirp-version.h.in",
+)
+
+cc_library(
+    name = "headers",
+    hdrs = [
+        "src/libslirp.h",
+        ":slirp_version_header",
+    ],
+    includes = ["src"],
 )
 
 cc_library(
@@ -35,43 +44,67 @@ cc_library(
     srcs = [
         "src/arp_table.c",
         "src/bootp.c",
+        "src/bootp.h",
         "src/cksum.c",
+        "src/debug.h",
         "src/dhcpv6.c",
+        "src/dhcpv6.h",
         "src/dnssearch.c",
         "src/if.c",
+        "src/if.h",
+        "src/ip.h",
+        "src/ip6.h",
         "src/ip6_icmp.c",
+        "src/ip6_icmp.h",
         "src/ip6_input.c",
         "src/ip6_output.c",
         "src/ip_icmp.c",
+        "src/ip_icmp.h",
         "src/ip_input.c",
         "src/ip_output.c",
+        "src/libslirp.h",
+        "src/main.h",
         "src/mbuf.c",
+        "src/mbuf.h",
         "src/misc.c",
+        "src/misc.h",
         "src/ncsi.c",
+        "src/ncsi-pkt.h",
         "src/ndp_table.c",
         "src/sbuf.c",
+        "src/sbuf.h",
         "src/slirp.c",
+        "src/slirp.h",
         "src/socket.c",
+        "src/socket.h",
         "src/state.c",
         "src/stream.c",
+        "src/stream.h",
+        "src/tcp.h",
         "src/tcp_input.c",
         "src/tcp_output.c",
         "src/tcp_subr.c",
         "src/tcp_timer.c",
+        "src/tcp_timer.h",
+        "src/tcp_var.h",
+        "src/tcpip.h",
         "src/tftp.c",
+        "src/tftp.h",
         "src/udp.c",
+        "src/udp.h",
         "src/udp6.c",
         "src/util.c",
+        "src/util.h",
         "src/version.c",
         "src/vmstate.c",
+        "src/vmstate.h",
     ] + select({
-        "@bazel_tools//src/conditions:linux_x86_64": ["src/ip_icmp_ping.c"],
-        "@bazel_tools//src/conditions:darwin": ["src/ip_icmp_ping.c"],
+        "@platforms//os:linux": ["src/ip_icmp_ping.c"],
+        "@platforms//os:macos": ["src/ip_icmp_ping.c"],
         "//conditions:default": [],
     }),
-    hdrs = glob(["src/*.h"]) + [":slirp_version_header"],
     copts = select({
-        "@bazel_tools//src/conditions:windows": [
+        "@platforms//os:windows": [
             "-Wno-format-nonliteral",
             "-Wno-unused-but-set-variable",
             "-Wno-implicit-function-declaration",
@@ -87,7 +120,7 @@ cc_library(
     defines = [
         "BUILDING_LIBSLIRP",
     ] + select({
-        "@bazel_tools//src/conditions:windows": [
+        "@platforms//os:windows": [
             "NDEBUG=1",
             "_FILE_OFFSET_BITS=64",
             "_GNU_SOURCE=1",
@@ -104,11 +137,14 @@ cc_library(
         "src",
     ],
     linkopts = select({
-        "@bazel_tools//src/conditions:windows": [
-            "-lws2_32",
-            "-liphlpapi",
+        "@platforms//os:windows": [
+            "-DEFAULTLIB:ws2_32.lib",
+            "-DEFAULTLIB:iphlpapi.lib",
         ],
         "//conditions:default": [],
     }),
-    deps = ["@glib//glib"],
+    deps = [
+        ":headers",
+        "@glib//glib",
+    ],
 )
