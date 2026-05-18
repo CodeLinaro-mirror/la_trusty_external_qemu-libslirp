@@ -139,6 +139,8 @@ bool ndp_table_search(Slirp *slirp, struct in6_addr ip_addr,
                       uint8_t out_ethaddr[ETH_ALEN]);
 
 /* Slirp configuration, specified by the application */
+#define SLIRP_MAX_DNS_SERVERS 4
+
 struct Slirp {
     int cfg_version;
 
@@ -159,6 +161,10 @@ struct Slirp {
     struct in_addr vdhcp_startaddr;
     struct in_addr vnameserver_addr;
     struct in6_addr vnameserver_addr6;
+
+    /* Patch: Store real host DNS addresses */
+    struct sockaddr_storage host_dns[SLIRP_MAX_DNS_SERVERS];
+    int host_dns_count;
 
     struct in_addr client_ipaddr;
     char client_hostname[33];
@@ -246,6 +252,9 @@ int get_dns_addr(struct in_addr *pdns_addr);
 
 /* Get the IPv6 address of the DNS server on the host side */
 int get_dns6_addr(struct in6_addr *pdns6_addr, uint32_t *scope_id);
+
+int slirp_translate_guest_dns(Slirp *slirp, const struct sockaddr_in *guest_ip,
+                              struct sockaddr_storage *host_ip);
 
 /* ncsi.c */
 

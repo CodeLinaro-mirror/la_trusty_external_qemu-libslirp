@@ -774,6 +774,10 @@ int sosendto(struct socket *so, struct mbuf *m)
         return -1;
     }
 
+    if (so->so_type == IPPROTO_UDP) {
+        udp_reattach(so, addr.ss_family);
+    }
+
     /* Don't care what port we get */
     ret = sendto(so->s, m->m_data, m->m_len, 0, (struct sockaddr *)&addr,
                  sockaddr_size(&addr));
@@ -1032,6 +1036,11 @@ void sofwdrain(struct socket *so)
 static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *sin)
 {
     if (!s->disable_dns && so->so_faddr.s_addr == s->vnameserver_addr.s_addr) {
+        if (so->so_fport == htons(53) &&
+            slirp_translate_guest_dns(s, (struct sockaddr_in *)&so->fhost.ss,
+                                      (struct sockaddr_storage *)sin) >= 0) {
+            return true;
+        }
         return so->so_fport == htons(53) && get_dns_addr(&sin->sin_addr) >= 0;
     }
 
@@ -1097,6 +1106,23 @@ void sotranslate_in(struct socket *so, struct sockaddr_storage *addr)
     Slirp *slirp = so->slirp;
     struct sockaddr_in *sin = (struct sockaddr_in *)addr;
     struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+
+    if (so->so_fport == htons(53) && slirp->host_dns_count > 0) {
+        int n = 0;
+        for (; n < slirp->host_dns_count; ++n) {
+            if (sockaddr_equal(addr, &slirp->host_dns[n])) {
+                if (so->so_ffamily == AF_INET) {
+                    addr->ss_family = AF_INET;
+                    sin->sin_addr.s_addr =
+                        htonl(ntohl(slirp->vnameserver_addr.s_addr) + n);
+                } else if (so->so_ffamily == AF_INET6) {
+                    addr->ss_family = AF_INET6;
+                    sin6->sin6_addr = slirp->vnameserver_addr6;
+                }
+                return;
+            }
+        }
+    }
 
     switch (addr->ss_family) {
     case AF_INET:

@@ -344,6 +344,23 @@ void udp_detach(struct socket *so)
     sofree(so);
 }
 
+slirp_os_socket udp_reattach(struct socket *so, unsigned short af)
+{
+    if (so->s != SLIRP_INVALID_SOCKET) {
+        struct sockaddr_storage addr = {};
+        socklen_t addr_len = sizeof(addr);
+        if (getsockname(so->s, (struct sockaddr *)&addr, &addr_len) == 0) {
+            if (addr.ss_family == af) {
+                return so->s; /* Already correct family */
+            }
+        }
+        closesocket(so->s);
+    }
+    so->s = slirp_socket(af, SOCK_DGRAM, 0);
+    slirp_register_poll_socket(so);
+    return so->s;
+}
+
 static const struct tos_t udptos[] = { { 0, 53, IPTOS_LOWDELAY, 0 }, /* DNS */
                                        { 0, 0, 0, 0 } };
 

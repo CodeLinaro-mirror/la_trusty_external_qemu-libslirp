@@ -697,6 +697,54 @@ Slirp *slirp_new(const SlirpConfig *cfg, const SlirpCb *callbacks, void *opaque)
     return slirp;
 }
 
+void slirp_init_custom_dns_servers(Slirp *slirp,
+                                   const struct sockaddr_storage *dns,
+                                   int dns_count)
+{
+    int n = 0;
+    slirp->host_dns_count = 0;
+    for (; n < dns_count; ++n) {
+        if (slirp->host_dns_count < SLIRP_MAX_DNS_SERVERS) {
+            slirp->host_dns[slirp->host_dns_count++] = dns[n];
+        }
+    }
+}
+
+static void override_host_ip_port(struct sockaddr_storage *dst,
+                                  const struct sockaddr_storage *src, int port)
+{
+    *dst = *src;
+    switch (dst->ss_family) {
+    case AF_INET: {
+        struct sockaddr_in *sin = (struct sockaddr_in *)dst;
+        sin->sin_port = htons(port);
+        break;
+    }
+    case AF_INET6: {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)dst;
+        sin6->sin6_port = htons(port);
+        break;
+    }
+    }
+}
+
+int slirp_translate_guest_dns(Slirp *slirp, const struct sockaddr_in *guest_ip,
+                              struct sockaddr_storage *host_ip)
+{
+    if (slirp->host_dns_count > 0) {
+        uint32_t dns_base = ntohl(slirp->vnameserver_addr.s_addr);
+        uint32_t guest = ntohl(guest_ip->sin_addr.s_addr);
+        int port = ntohs(guest_ip->sin_port);
+        int dns_index = (int)(guest - dns_base);
+
+        if (dns_index >= 0 && dns_index < slirp->host_dns_count) {
+            override_host_ip_port(host_ip, &slirp->host_dns[dns_index], port);
+            return 0;
+        }
+    }
+    return -1;
+}
+
 Slirp *slirp_init(int restricted, bool in_enabled, struct in_addr vnetwork,
                   struct in_addr vnetmask, struct in_addr vhost,
                   bool in6_enabled, struct in6_addr vprefix_addr6,

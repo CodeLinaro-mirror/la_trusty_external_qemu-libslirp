@@ -85,6 +85,8 @@ void udp_input(register struct mbuf *, int);
 slirp_os_socket udp_attach(struct socket *, unsigned short af);
 /* Destroy socket */
 void udp_detach(struct socket *);
+/* Re-attach a socket if family changed */
+slirp_os_socket udp_reattach(struct socket *so, unsigned short af);
 
 /* Listen for incoming UDP datagrams on this haddr+hport */
 struct socket *udp_listen(Slirp *, uint32_t haddr, unsigned hport, uint32_t laddr, unsigned lport, int flags);

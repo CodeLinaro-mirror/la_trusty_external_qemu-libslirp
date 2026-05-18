@@ -294,6 +294,11 @@ SLIRP_EXPORT
 void slirp_pollfds_poll(Slirp *slirp, int select_error,
                         SlirpGetREventsCb get_revents, void *opaque);
 
+SLIRP_EXPORT
+void slirp_init_custom_dns_servers(Slirp *slirp,
+                                   const struct sockaddr_storage *dns,
+                                   int dns_count);
+
 /* This is called by the application when the guest emits a packet on the
  * guest network, to be interpreted by slirp. */
 SLIRP_EXPORT
