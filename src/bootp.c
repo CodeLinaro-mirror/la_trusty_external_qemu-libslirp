@@ -282,7 +282,7 @@ static void bootp_reply(Slirp *slirp,
             q += 4;
 
             *q++ = RFC1533_DNS;
-            int ipv4_dns_count = slirp->ipv4_dns_count;
+            int dns_count = slirp->host_dns_count > 0 ? slirp->host_dns_count : 1;
 
             /* Check if there is room for the length byte and at least one 4-byte
              * IPv4 address. */
@@ -293,13 +293,13 @@ static void bootp_reply(Slirp *slirp,
             } else {
                 /* Limit the number of advertised DNS servers if mapping them all
                  * would exceed the remaining DHCP packet buffer space. */
-                if (q + 1 + 4 * ipv4_dns_count > end) {
+                if (q + 1 + 4 * dns_count > end) {
                     g_warning("DHCP packet size exceeded, omitting some DNS servers.");
-                    ipv4_dns_count = (end - q - 1) / 4;
+                    dns_count = (end - q - 1) / 4;
                 }
 
-                *q++ = 4 * ipv4_dns_count;
-                for (int i = 0; i < ipv4_dns_count; i++) {
+                *q++ = 4 * dns_count;
+                for (int i = 0; i < dns_count; i++) {
                     struct in_addr dns_addr = slirp->vnameserver_addr;
                     dns_addr.s_addr = htonl(ntohl(dns_addr.s_addr) + i);
                     memcpy(q, &dns_addr, 4);
