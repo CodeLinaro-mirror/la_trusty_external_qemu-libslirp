@@ -145,6 +145,6 @@ cc_library(
     }),
     deps = [
         ":headers",
-        "@glib//glib",
+        "@glib//glib:glib_import",
     ],
 )
