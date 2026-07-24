@@ -685,16 +685,12 @@ Slirp *slirp_new(const SlirpConfig *cfg, const SlirpCb *callbacks, void *opaque)
         slirp->http_proxy_on = cfg->http_proxy_on;
 
         slirp->host_dns_count = 0;
-        slirp->ipv4_dns_count = 0;
         int n = 0;
         for (n = 0; n < cfg->host_dns_count; ++n) {
             switch (cfg->host_dns[n].ss_family) {
             case AF_INET:
             case AF_INET6:
                 if (slirp->host_dns_count < SLIRP_MAX_DNS_SERVERS) {
-                    if (cfg->host_dns[n].ss_family == AF_INET) {
-                        slirp->ipv4_dns_count++;
-                    }
                     slirp->host_dns[slirp->host_dns_count++] = cfg->host_dns[n];
                     if (slirp_debug & DBG_MISC) {
                         char temp[INET6_ADDRSTRLEN];
@@ -725,12 +721,6 @@ Slirp *slirp_new(const SlirpConfig *cfg, const SlirpCb *callbacks, void *opaque)
         memset(slirp->oob_eth_addr, 0, ETH_ALEN);
         slirp->http_proxy_on = false;
         slirp->host_dns_count = 0;
-        slirp->ipv4_dns_count = 0;
-    }
-
-    /* Ensure at least one DNS server (the default 10.0.2.3) is advertised. */
-    if (slirp->ipv4_dns_count == 0) {
-        slirp->ipv4_dns_count = 1;
     }
 
     ip6_post_init(slirp);
@@ -1180,7 +1170,8 @@ static void arp_input(Slirp *slirp, const uint8_t *pkt, int pkt_len)
             slirp->vnetwork_addr.s_addr) {
             uint32_t tip = ntohl(ah->ar_tip);
             uint32_t vnameserver = ntohl(slirp->vnameserver_addr.s_addr);
-            if ((tip >= vnameserver && tip < vnameserver + slirp->ipv4_dns_count) ||
+            int dns_count = slirp->host_dns_count > 0 ? slirp->host_dns_count : 1;
+            if ((tip >= vnameserver && tip < vnameserver + dns_count) ||
                 ah->ar_tip == slirp->vhost_addr.s_addr)
                 goto arp_ok;
             /* TODO: IPv6 */

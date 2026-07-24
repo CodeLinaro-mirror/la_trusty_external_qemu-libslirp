@@ -458,7 +458,7 @@ int tcp_fconnect(struct socket *so, unsigned short af)
 
     ret = so->s = socket_fallback(&addr, SOCK_STREAM);
     if (ret >= 0) {
-        ret = slirp_bind_outbound(so, af);
+        ret = slirp_bind_outbound(so, addr.ss_family);
         if (ret < 0) {
             // bind failed - close socket
             closesocket(so->s);

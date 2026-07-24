@@ -344,6 +344,64 @@ void udp_detach(struct socket *so)
     sofree(so);
 }
 
+int udp_reattach(struct socket *so, unsigned short af)
+{
+    int ttl = 0;
+    socklen_t ttl_len = sizeof(ttl);
+
+    if (so->s != -1) {
+        struct sockaddr_storage addr = {};
+        socklen_t addr_len = sizeof(addr);
+        if (getsockname(so->s, (struct sockaddr *)&addr, &addr_len) == 0) {
+            if (addr.ss_family == af) {
+                return so->s; /* Already correct family */
+            }
+        }
+        if (getsockopt(so->s, IPPROTO_IP, IP_TTL, &ttl, &ttl_len) != 0) {
+            ttl_len = sizeof(ttl);
+            if (getsockopt(so->s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &ttl, &ttl_len) != 0) {
+                ttl = 0;
+            }
+        }
+        so->slirp->cb->unregister_poll_fd(so->s, so->slirp->opaque);
+        closesocket(so->s);
+    }
+    so->s = slirp_socket(af, SOCK_DGRAM, 0);
+    if (so->s != -1) {
+        if (slirp_bind_outbound(so, af) != 0) {
+            closesocket(so->s);
+            so->s = -1;
+            return -1;
+        }
+
+        if (ttl > 0) {
+            if (af == AF_INET) {
+                setsockopt(so->s, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
+            } else {
+                setsockopt(so->s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &ttl, sizeof(ttl));
+            }
+        }
+
+#ifdef __linux__
+        {
+            int opt = 1;
+            switch (af) {
+            case AF_INET:
+                setsockopt(so->s, IPPROTO_IP, IP_RECVERR, &opt, sizeof(opt));
+                break;
+            case AF_INET6:
+                setsockopt(so->s, IPPROTO_IPV6, IPV6_RECVERR, &opt, sizeof(opt));
+                break;
+            default:
+                g_assert_not_reached();
+            }
+        }
+#endif
+        so->slirp->cb->register_poll_fd(so->s, so->slirp->opaque);
+    }
+    return so->s;
+}
+
 static const struct tos_t udptos[] = { { 0, 53, IPTOS_LOWDELAY, 0 }, /* DNS */
                                        { 0, 0, 0, 0 } };
 
