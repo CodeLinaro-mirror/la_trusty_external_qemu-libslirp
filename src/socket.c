@@ -756,6 +756,10 @@ int sosendto(struct socket *so, struct mbuf *m)
         return -1;
     }
 
+    if (so->so_type == IPPROTO_UDP && udp_reattach(so, addr.ss_family) < 0) {
+        return -1;
+    }
+
     /* Don't care what port we get */
     ret = sendto(so->s, m->m_data, m->m_len, 0, (struct sockaddr *)&addr,
                  sockaddr_size(&addr));
@@ -964,19 +968,9 @@ static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *si
 
         /* Mapping guest virtual DNS IPs (10.0.2.3, 10.0.2.4, etc.) to host DNS servers */
         if (s->host_dns_count > 0) {
-            int n, ipv4_dns_count = 0;
-            for (n = 0; n < s->host_dns_count; ++n) {
-                if (s->host_dns[n].ss_family != AF_INET) {
-                    continue;
-                }
-                if (faddr == dns_base + ipv4_dns_count) {
-                    dns_index = n;
-                    break;
-                }
-                ipv4_dns_count++;
-                if (ipv4_dns_count >= SLIRP_MAX_DNS_SERVERS) {
-                    break;
-                }
+            uint32_t offset = faddr - dns_base;
+            if (offset < s->host_dns_count) {
+                dns_index = offset;
             }
         }
 
@@ -985,8 +979,13 @@ static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *si
                 return false;
             }
             if (dns_index >= 0) {
-                *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
-                sin->sin_port = so->so_fport;
+                if (s->host_dns[dns_index].ss_family == AF_INET6) {
+                    *(struct sockaddr_in6 *)sin = *(struct sockaddr_in6 *)(&s->host_dns[dns_index]);
+                    ((struct sockaddr_in6 *)sin)->sin6_port = so->so_fport;
+                } else {
+                    *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
+                    sin->sin_port = so->so_fport;
+                }
                 return true;
             }
             return get_dns_addr(&sin->sin_addr) >= 0;
@@ -1121,6 +1120,20 @@ void sotranslate_in(struct socket *so, struct sockaddr_storage *addr)
     Slirp *slirp = so->slirp;
     struct sockaddr_in *sin = (struct sockaddr_in *)addr;
     struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+
+    /* Cross-family reverse translation for host DNS replies */
+    if (so->so_ffamily == AF_INET && addr->ss_family == AF_INET6) {
+        addr->ss_family = AF_INET;
+        sin->sin_addr = so->so_faddr;
+        sin->sin_port = so->so_fport;
+        return;
+    }
+    if (so->so_ffamily == AF_INET6 && addr->ss_family == AF_INET) {
+        addr->ss_family = AF_INET6;
+        sin6->sin6_addr = so->so_faddr6;
+        sin6->sin6_port = so->so_fport6;
+        return;
+    }
 
     switch (addr->ss_family) {
     case AF_INET:

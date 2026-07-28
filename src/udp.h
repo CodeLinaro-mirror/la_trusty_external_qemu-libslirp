@@ -79,6 +79,7 @@ void udp_init(Slirp *);
 void udp_cleanup(Slirp *);
 void udp_input(register struct mbuf *, int);
 int udp_attach(struct socket *, unsigned short af);
+int udp_reattach(struct socket *so, unsigned short af);
 void udp_detach(struct socket *);
 struct socket *udp_listen(Slirp *, uint32_t, unsigned, uint32_t, unsigned, int);
 struct socket *udpx_listen(Slirp *,
