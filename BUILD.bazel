@@ -141,10 +141,10 @@ cc_library(
             "-DEFAULTLIB:ws2_32.lib",
             "-DEFAULTLIB:iphlpapi.lib",
         ],
-        "//conditions:default": [],
+        "//conditions:default": ["-lresolv"],
     }),
     deps = [
         ":headers",
-        "@glib//glib",
+        "@glib//glib:glib_import",
     ],
 )
