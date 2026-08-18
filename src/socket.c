@@ -980,15 +980,34 @@ static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *si
             }
             if (dns_index >= 0) {
                 if (s->host_dns[dns_index].ss_family == AF_INET6) {
-                    *(struct sockaddr_in6 *)sin = *(struct sockaddr_in6 *)(&s->host_dns[dns_index]);
-                    ((struct sockaddr_in6 *)sin)->sin6_port = so->so_fport;
+                    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sin;
+                    *sin6 = *(struct sockaddr_in6 *)(&s->host_dns[dns_index]);
+                    if (sin6->sin6_port == 0) {
+                        sin6->sin6_port = htons(53);
+                    }
                 } else {
                     *sin = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
-                    sin->sin_port = so->so_fport;
+                    if (sin->sin_port == 0) {
+                        sin->sin_port = htons(53);
+                    }
                 }
                 return true;
             }
-            return get_dns_addr(&sin->sin_addr) >= 0;
+            if (get_dns_addr(&sin->sin_addr) >= 0) {
+                return true;
+            }
+            uint32_t scope_id;
+            struct in6_addr dns6;
+            if (get_dns6_addr(&dns6, &scope_id) >= 0) {
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sin;
+                memset(sin6, 0, sizeof(*sin6));
+                sin6->sin6_family = AF_INET6;
+                sin6->sin6_addr = dns6;
+                sin6->sin6_port = so->so_fport;
+                sin6->sin6_scope_id = scope_id;
+                return true;
+            }
+            return false;
         }
     }
 
@@ -1004,9 +1023,34 @@ static bool sotranslate_out4(Slirp *s, struct socket *so, struct sockaddr_in *si
     return true;
 }
 
+static bool is_dns_addr6(Slirp *s, const struct in6_addr *addr)
+{
+    struct in6_addr dns_base = s->vnameserver_addr6;
+    int count = s->host_dns_count > 0 ? s->host_dns_count : 1;
+    int n;
+    for (n = 0; n < count; ++n) {
+        if (in6_equal(addr, &dns_base)) {
+            return true;
+        }
+        /* Increment DNS IPv6 address */
+        int offset = 15;
+        while (offset >= 0) {
+            dns_base.s6_addr[offset]++;
+            if (dns_base.s6_addr[offset] != 0) {
+                break;
+            }
+            offset--;
+        }
+    }
+    return false;
+}
+
 static bool sotranslate_out6(Slirp *s, struct socket *so, struct sockaddr_in6 *sin)
 {
-    if (!s->disable_dns && in6_equal(&so->so_faddr6, &s->vnameserver_addr6)) {
+    if (!s->disable_dns && is_dns_addr6(s, &so->so_faddr6)) {
+        if (so->so_fport6 != htons(53)) {
+            return false;
+        }
         uint32_t scope_id;
         if (s->host_dns_count > 0) {
             /* The implementation below is adapted from external/qemu/slirp/slirp.c */
@@ -1016,14 +1060,13 @@ static bool sotranslate_out6(Slirp *s, struct socket *so, struct sockaddr_in6 *s
             struct in6_addr dns_base = s->vnameserver_addr6;
             int n, dns_index = -1;
             for (n = 0; n < s->host_dns_count; ++n) {
-                if (s->host_dns[n].ss_family != AF_INET6) {
-                    continue;
-                }
                 if (in6_equal(&so->so_faddr6, &dns_base)) {
-                    dns_index = n;
+                    if (s->host_dns[n].ss_family == AF_INET6 || s->host_dns[n].ss_family == AF_INET) {
+                        dns_index = n;
+                    }
                     break;
                 }
-                /* Increment DNS Ipv6 address */
+                /* Increment DNS IPv6 address */
                 int offset = 15;
                 while (offset >= 0) {
                     dns_base.s6_addr[offset]++;
@@ -1034,8 +1077,18 @@ static bool sotranslate_out6(Slirp *s, struct socket *so, struct sockaddr_in6 *s
                 }
             }
             if (dns_index >= 0) {
-                *sin = *(struct sockaddr_in6 *)(&s->host_dns[dns_index]);
-                sin->sin6_port = so->so_fport6;
+                if (s->host_dns[dns_index].ss_family == AF_INET) {
+                    struct sockaddr_in *sin4 = (struct sockaddr_in *)sin;
+                    *sin4 = *(struct sockaddr_in *)(&s->host_dns[dns_index]);
+                    if (sin4->sin_port == 0) {
+                        sin4->sin_port = htons(53);
+                    }
+                } else {
+                    *sin = *(struct sockaddr_in6 *)(&s->host_dns[dns_index]);
+                    if (sin->sin6_port == 0) {
+                        sin->sin6_port = htons(53);
+                    }
+                }
                 return true;
             } else {
                 // Safely fallback to host system IPv6 DNS if no custom match
@@ -1125,13 +1178,23 @@ void sotranslate_in(struct socket *so, struct sockaddr_storage *addr)
     if (so->so_ffamily == AF_INET && addr->ss_family == AF_INET6) {
         addr->ss_family = AF_INET;
         sin->sin_addr = so->so_faddr;
-        sin->sin_port = so->so_fport;
+
+        /* Restore DNS port to 53 for guest resolver */
+        uint32_t faddr = ntohl(so->so_faddr.s_addr);
+        uint32_t dns_base = ntohl(slirp->vnameserver_addr.s_addr);
+        uint32_t dns_limit = dns_base + (slirp->host_dns_count > 0 ? slirp->host_dns_count : 1);
+        if (faddr >= dns_base && faddr < dns_limit) {
+            sin->sin_port = so->so_fport;
+        }
         return;
     }
     if (so->so_ffamily == AF_INET6 && addr->ss_family == AF_INET) {
         addr->ss_family = AF_INET6;
         sin6->sin6_addr = so->so_faddr6;
-        sin6->sin6_port = so->so_fport6;
+        /* Restore DNS port to 53 for guest resolver */
+        if (is_dns_addr6(slirp, &so->so_faddr6)) {
+            sin6->sin6_port = so->so_fport6;
+        }
         return;
     }
 
@@ -1147,6 +1210,14 @@ void sotranslate_in(struct socket *so, struct sockaddr_storage *addr)
                        so->so_faddr.s_addr != slirp->vhost_addr.s_addr) {
                 sin->sin_addr = so->so_faddr;
             }
+
+            /* Restore DNS port to 53 for guest resolver */
+            uint32_t faddr = ntohl(so->so_faddr.s_addr);
+            uint32_t dns_base = ntohl(slirp->vnameserver_addr.s_addr);
+            uint32_t dns_limit = dns_base + (slirp->host_dns_count > 0 ? slirp->host_dns_count : 1);
+            if (faddr >= dns_base && faddr < dns_limit) {
+                sin->sin_port = so->so_fport;
+            }
         }
         break;
 
@@ -1156,6 +1227,11 @@ void sotranslate_in(struct socket *so, struct sockaddr_storage *addr)
             if (in6_equal(&sin6->sin6_addr, &in6addr_loopback) ||
                 !in6_equal(&so->so_faddr6, &slirp->vhost_addr6)) {
                 sin6->sin6_addr = so->so_faddr6;
+            }
+
+            /* Restore DNS port to 53 for guest resolver */
+            if (is_dns_addr6(slirp, &so->so_faddr6)) {
+                sin6->sin6_port = so->so_fport6;
             }
         }
         break;
