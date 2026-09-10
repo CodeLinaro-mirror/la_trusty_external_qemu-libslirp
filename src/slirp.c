@@ -96,47 +96,95 @@ static unsigned dns6_addr_time;
 
 int get_dns_addr(struct in_addr *pdns_addr)
 {
-    FIXED_INFO *FixedInfo = NULL;
-    ULONG BufLen;
-    DWORD ret;
-    IP_ADDR_STRING *pIPAddr;
+    ULONG BufLen = INITIAL_DNS_ADDR_BUF_SIZE;
+    DWORD ret = ERROR_OUTOFMEMORY;
+    IP_ADAPTER_ADDRESSES *AdapterAddresses = NULL;
     struct in_addr tmp_addr;
+    int retries = REALLOC_RETRIES;
 
     if (dns_addr.s_addr != 0 && (curtime - dns_addr_time) < TIMEOUT_DEFAULT) {
         *pdns_addr = dns_addr;
         return 0;
     }
 
-    FixedInfo = (FIXED_INFO *)GlobalAlloc(GPTR, sizeof(FIXED_INFO));
+    // Modern Windows: Use GetAdaptersAddresses with retry loop
+    do {
+        AdapterAddresses = (IP_ADAPTER_ADDRESSES *)GlobalAlloc(GPTR, BufLen);
+        if (!AdapterAddresses) {
+            break;
+        }
+        ret = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST, NULL, AdapterAddresses, &BufLen);
+        if (ret == ERROR_BUFFER_OVERFLOW) {
+            GlobalFree(AdapterAddresses);
+            AdapterAddresses = NULL;
+        } else {
+            break;
+        }
+    } while (--retries > 0);
+
+    if (AdapterAddresses && ret == NO_ERROR) {
+        IP_ADAPTER_ADDRESSES *adapter = AdapterAddresses;
+        while (adapter) {
+            if (adapter->OperStatus == IfOperStatusUp && adapter->FirstDnsServerAddress) {
+                IP_ADAPTER_DNS_SERVER_ADDRESS *dns_server = adapter->FirstDnsServerAddress;
+                while (dns_server) {
+                    if (dns_server->Address.lpSockaddr && dns_server->Address.lpSockaddr->sa_family == AF_INET) {
+                        struct sockaddr_in *sin = (struct sockaddr_in *)dns_server->Address.lpSockaddr;
+                        uint32_t ip = ntohl(sin->sin_addr.s_addr);
+                        if (sin->sin_addr.s_addr != INADDR_ANY && (ip & 0xFF000000) != 0x7F000000) {
+                            *pdns_addr = sin->sin_addr;
+                            dns_addr = sin->sin_addr;
+                            dns_addr_time = curtime;
+                            GlobalFree(AdapterAddresses);
+                            return 0;
+                        }
+                    }
+                    dns_server = dns_server->Next;
+                }
+            }
+            adapter = adapter->Next;
+        }
+    }
+    if (AdapterAddresses) {
+        GlobalFree(AdapterAddresses);
+        AdapterAddresses = NULL;
+    }
+
+    // Fallback to legacy GetNetworkParams
+    FIXED_INFO *FixedInfo = NULL;
     BufLen = sizeof(FIXED_INFO);
-
-    if (ERROR_BUFFER_OVERFLOW == GetNetworkParams(FixedInfo, &BufLen)) {
-        if (FixedInfo) {
+    FixedInfo = (FIXED_INFO *)GlobalAlloc(GPTR, sizeof(FIXED_INFO));
+    DWORD res = ERROR_NOT_ENOUGH_MEMORY;
+    if (FixedInfo) {
+        res = GetNetworkParams(FixedInfo, &BufLen);
+        if (res == ERROR_BUFFER_OVERFLOW) {
             GlobalFree(FixedInfo);
-            FixedInfo = NULL;
+            FixedInfo = (FIXED_INFO *)GlobalAlloc(GPTR, BufLen);
+            if (FixedInfo) {
+                res = GetNetworkParams(FixedInfo, &BufLen);
+            }
         }
-        FixedInfo = GlobalAlloc(GPTR, BufLen);
     }
-
-    if ((ret = GetNetworkParams(FixedInfo, &BufLen)) != ERROR_SUCCESS) {
-        printf("GetNetworkParams failed. ret = %08x\n", (unsigned)ret);
-        if (FixedInfo) {
-            GlobalFree(FixedInfo);
-            FixedInfo = NULL;
+    if (FixedInfo && res == ERROR_SUCCESS) {
+        IP_ADDR_STRING *pIPAddr = &(FixedInfo->DnsServerList);
+        while (pIPAddr) {
+            if (pIPAddr->IpAddress.String[0] != '\0' && inet_aton(pIPAddr->IpAddress.String, &tmp_addr) != 0) {
+                uint32_t ip = ntohl(tmp_addr.s_addr);
+                if (tmp_addr.s_addr != INADDR_ANY && (ip & 0xFF000000) != 0x7F000000) {
+                    *pdns_addr = tmp_addr;
+                    dns_addr = tmp_addr;
+                    dns_addr_time = curtime;
+                    GlobalFree(FixedInfo);
+                    return 0;
+                }
+            }
+            pIPAddr = pIPAddr->Next;
         }
-        return -1;
     }
-
-    pIPAddr = &(FixedInfo->DnsServerList);
-    inet_aton(pIPAddr->IpAddress.String, &tmp_addr);
-    *pdns_addr = tmp_addr;
-    dns_addr = tmp_addr;
-    dns_addr_time = curtime;
     if (FixedInfo) {
         GlobalFree(FixedInfo);
-        FixedInfo = NULL;
     }
-    return 0;
+    return -1;
 }
 
 static int is_site_local_dns_broadcast(struct in6_addr *address)
@@ -368,17 +416,27 @@ int get_dns6_addr(struct in6_addr *pdns6_addr, uint32_t *scope_id)
 #define RESOLV_CONF_PATH "/etc/resolv.conf"
 #endif
 
+static const char *get_active_resolv_conf_path(void)
+{
+    if (access("/run/systemd/resolve/resolv.conf", R_OK) == 0) {
+        return "/run/systemd/resolve/resolv.conf";
+    }
+    return RESOLV_CONF_PATH;
+}
+
 static int get_dns_addr_cached(void *pdns_addr, void *cached_addr,
                                socklen_t addrlen, struct stat *cached_stat,
                                unsigned *cached_time)
 {
     struct stat old_stat;
+    const char *path;
     if (curtime - *cached_time < TIMEOUT_DEFAULT) {
         memcpy(pdns_addr, cached_addr, addrlen);
         return 0;
     }
+    path = get_active_resolv_conf_path();
     old_stat = *cached_stat;
-    if (stat(RESOLV_CONF_PATH, cached_stat) != 0) {
+    if (stat(path, cached_stat) != 0) {
         return -1;
     }
     if (cached_stat->st_dev == old_stat.st_dev &&
@@ -445,7 +503,7 @@ static int get_dns_addr_resolv_conf(int af, void *pdns_addr, void *cached_addr,
     unsigned if_index;
     unsigned nameservers = 0;
 
-    f = fopen(RESOLV_CONF_PATH, "r");
+    f = fopen(get_active_resolv_conf_path(), "r");
     if (!f)
         return -1;
 
