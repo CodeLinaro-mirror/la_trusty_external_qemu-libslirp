@@ -136,6 +136,14 @@ static void icmp6_send_echoreply(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
 
 void icmp6_forward_error(struct mbuf *m, uint8_t type, uint8_t code, struct in6_addr *src)
 {
+    /*
+     * sorecvfrom() reports receive errors with so->so_m, which is NULL for
+     * sockets created by udpx_listen() (host forwards). icmp_forward_error()
+     * already tolerates that; so must we.
+     */
+    if (!m) {
+        return;
+    }
     Slirp *slirp = m->slirp;
     struct mbuf *t;
     struct ip6 *ip = mtod(m, struct ip6 *);

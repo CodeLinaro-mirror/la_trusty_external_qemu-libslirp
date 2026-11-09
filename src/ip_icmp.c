@@ -338,7 +338,6 @@ void icmp_forward_error(struct mbuf *msrc, uint8_t type, uint8_t code, int minsi
 
     DEBUG_CALL("icmp_send_error");
     DEBUG_ARG("msrc = %p", msrc);
-    DEBUG_ARG("msrc_len = %d", msrc->m_len);
 
     if (type != ICMP_UNREACH && type != ICMP_TIMXCEED)
         goto end_error;
@@ -346,6 +345,7 @@ void icmp_forward_error(struct mbuf *msrc, uint8_t type, uint8_t code, int minsi
     /* check msrc */
     if (!msrc)
         goto end_error;
+    DEBUG_ARG("msrc_len = %d", msrc->m_len);
     ip = mtod(msrc, struct ip *);
     if (slirp_debug & SLIRP_DBG_MISC) {
         char addr_src[INET_ADDRSTRLEN];
@@ -535,20 +535,21 @@ void icmp_receive(struct socket *so)
     len = recv(so->s, icp, M_ROOM(m), 0);
 #endif
 
-    if (so->so_type == IPPROTO_IP) {
-        if (len >= sizeof(struct ip)) {
+    /* A failed recv() leaves no inner IP header to strip; keep its errno. */
+    if (so->so_type == IPPROTO_IP && len > 0) {
+        if (len >= (int)sizeof(struct ip)) {
             struct ip *inner_ip = mtod(m, struct ip *);
             int inner_hlen = inner_ip->ip_hl << 2;
             if (inner_hlen > len) {
                 len = -1;
-                errno = -EINVAL;
+                errno = EINVAL;
             } else {
                 len -= inner_hlen;
                 memmove(icp, (unsigned char *)icp + inner_hlen, len);
             }
         } else {
             len = -1;
-            errno = -EINVAL;
+            errno = EINVAL;
         }
     }
 
