@@ -175,6 +175,28 @@ int slirp_setsockopt_wrap(slirp_os_socket sockfd, int level, int optname,
 slirp_os_socket slirp_socket(int domain, int type, int protocol);
 void slirp_set_nonblock(slirp_os_socket fd);
 
+/*
+ * True when a send on a non-blocking datagram socket failed only because the
+ * host could not take the datagram right now (socket send buffer or interface
+ * queue full) or was interrupted by a signal. Callers drop the datagram instead
+ * of reporting an ICMP error to the guest; the guest will retransmit like it
+ * would on a congested network.
+ */
+static inline int slirp_send_would_block(int err)
+{
+    return err == EAGAIN || err == EWOULDBLOCK || err == ENOBUFS ||
+           err == EINTR;
+}
+
+/*
+ * True when a receive on a non-blocking datagram or ICMP socket returned no
+ * packet because of a spurious wakeup or signal rather than a socket error.
+ */
+static inline int slirp_recv_would_block(int err)
+{
+    return err == EAGAIN || err == EWOULDBLOCK || err == EINTR;
+}
+
 static inline int slirp_socket_set_v6only(slirp_os_socket fd, int v)
 {
     return setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const void *) &v, sizeof(v));

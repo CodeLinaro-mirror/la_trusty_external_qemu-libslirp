@@ -221,6 +221,18 @@ ncsitest = executable('ncsitest', 'test/ncsitest.c',
 
 test('ncsi', ncsitest)
 
+if host_system != 'windows'
+  nonblocktest = executable('nonblocktest', 'test/nonblocktest.c',
+    link_with: [lib],
+    c_args : cargs,
+    export_dynamic : true,
+    include_directories: ['src'],
+    dependencies: [glib_dep, platform_deps, cc.find_library('dl', required: false)]
+  )
+
+  test('nonblock', nonblocktest)
+endif
+
 if install_devel
   install_headers(['src/libslirp.h'], subdir : 'slirp')
 
