@@ -75,6 +75,7 @@ static int icmp6_send(struct socket *so, struct mbuf *m, int hlen)
     if (not_valid_socket(so->s)) {
         return -1;
     }
+    slirp_set_nonblock(so->s);
     slirp_register_poll_socket(so);
 
     if (slirp_bind_outbound(so, AF_INET6) != 0) {
@@ -102,7 +103,9 @@ static int icmp6_send(struct socket *so, struct mbuf *m, int hlen)
                (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         DEBUG_MISC("icmp6_input icmp sendto tx errno = %d-%s", errno,
                    strerror(errno));
-        icmp6_send_error(m, ICMP6_UNREACH, ICMP6_UNREACH_NO_ROUTE);
+        if (!slirp_send_would_block(errno)) {
+            icmp6_send_error(m, ICMP6_UNREACH, ICMP6_UNREACH_NO_ROUTE);
+        }
         icmp_detach(so);
     }
 
@@ -136,6 +139,14 @@ static void icmp6_send_echoreply(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
 
 void icmp6_forward_error(struct mbuf *m, uint8_t type, uint8_t code, struct in6_addr *src)
 {
+    /*
+     * sorecvfrom() reports receive errors with so->so_m, which is NULL for
+     * sockets created by udpx_listen() (host forwards). icmp_forward_error()
+     * already tolerates that; so must we.
+     */
+    if (!m) {
+        return;
+    }
     Slirp *slirp = m->slirp;
     struct mbuf *t;
     struct ip6 *ip = mtod(m, struct ip6 *);
@@ -259,6 +270,15 @@ void icmp6_receive(struct socket *so)
 
     m->m_data -= hlen;
     m->m_len += hlen;
+
+    if (len == -1 && slirp_recv_would_block(errno)) {
+        /*
+         * Spurious wakeup, no reply yet. Keep the socket and so_m for the
+         * real reply instead of icmp_detach()ing them; so_expire reclaims
+         * the socket like any unanswered ping.
+         */
+        return;
+    }
 
     if (len == -1 || len == 0) {
         if (errno == ENETUNREACH) {
@@ -648,7 +668,9 @@ void icmp6_input(struct mbuf *m)
                        (struct sockaddr *)&addr, sockaddr_size(&addr)) == -1) {
                 DEBUG_MISC("icmp6_input udp sendto tx errno = %d-%s", errno,
                            strerror(errno));
-                icmp6_send_error(m, ICMP6_UNREACH, ICMP6_UNREACH_NO_ROUTE);
+                if (!slirp_send_would_block(errno)) {
+                    icmp6_send_error(m, ICMP6_UNREACH, ICMP6_UNREACH_NO_ROUTE);
+                }
                 udp_detach(so);
             }
         } /* if (in6_equal_host(&ip->ip_dst)) */

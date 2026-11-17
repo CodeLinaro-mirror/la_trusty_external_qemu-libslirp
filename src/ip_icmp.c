@@ -127,6 +127,8 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
 #else
         return -1;
 #endif
+    } else {
+        slirp_set_nonblock(so->s);
     }
     slirp_register_poll_socket(so);
 
@@ -161,7 +163,10 @@ static int icmp_send(struct socket *so, struct mbuf *m, int hlen)
                (struct sockaddr *)&addr, sizeof(addr)) == -1) {
         DEBUG_MISC("icmp_input icmp sendto tx errno = %d-%s", errno,
                    strerror(errno));
-        icmp_send_error(m, ICMP_UNREACH, ICMP_UNREACH_NET, 0, strerror(errno));
+        if (!slirp_send_would_block(errno)) {
+            icmp_send_error(m, ICMP_UNREACH, ICMP_UNREACH_NET, 0,
+                            strerror(errno));
+        }
         icmp_detach(so);
     }
 
@@ -283,8 +288,10 @@ void icmp_input(struct mbuf *m, int hlen)
                        (struct sockaddr *)&addr, sockaddr_size(&addr)) == -1) {
                 DEBUG_MISC("icmp_input udp sendto tx errno = %d-%s", errno,
                            strerror(errno));
-                icmp_send_error(m, ICMP_UNREACH, ICMP_UNREACH_NET, 0,
-                                strerror(errno));
+                if (!slirp_send_would_block(errno)) {
+                    icmp_send_error(m, ICMP_UNREACH, ICMP_UNREACH_NET, 0,
+                                    strerror(errno));
+                }
                 udp_detach(so);
             }
         } /* if ip->ip_dst.s_addr == alias_addr.s_addr */
@@ -338,7 +345,6 @@ void icmp_forward_error(struct mbuf *msrc, uint8_t type, uint8_t code, int minsi
 
     DEBUG_CALL("icmp_send_error");
     DEBUG_ARG("msrc = %p", msrc);
-    DEBUG_ARG("msrc_len = %d", msrc->m_len);
 
     if (type != ICMP_UNREACH && type != ICMP_TIMXCEED)
         goto end_error;
@@ -346,6 +352,7 @@ void icmp_forward_error(struct mbuf *msrc, uint8_t type, uint8_t code, int minsi
     /* check msrc */
     if (!msrc)
         goto end_error;
+    DEBUG_ARG("msrc_len = %d", msrc->m_len);
     ip = mtod(msrc, struct ip *);
     if (slirp_debug & SLIRP_DBG_MISC) {
         char addr_src[INET_ADDRSTRLEN];
@@ -527,28 +534,41 @@ void icmp_receive(struct socket *so)
     id = icp->icmp_id;
 
 #ifndef WIN32
-    if (so->ping_pipe != NULL)
+    if (so->ping_pipe != NULL) {
         len = ping_binary_recv(so, ip, icp);
-    else
-        len = recv(so->s, icp, M_ROOM(m), 0);
-#else
-    len = recv(so->s, icp, M_ROOM(m), 0);
+    } else
 #endif
+    {
+        len = recv(so->s, icp, M_ROOM(m), 0);
+        if (len == -1 && slirp_recv_would_block(errno)) {
+            /*
+             * Spurious wakeup, no reply yet. A failed recv() writes nothing,
+             * so so_m is intact once the header offsets are put back. Keep
+             * the socket registered for the real reply instead of
+             * icmp_detach()ing it; so_expire reclaims it like any unanswered
+             * ping.
+             */
+            m->m_data -= hlen;
+            m->m_len += hlen;
+            return;
+        }
+    }
 
-    if (so->so_type == IPPROTO_IP) {
-        if (len >= sizeof(struct ip)) {
+    /* A failed recv() leaves no inner IP header to strip; keep its errno. */
+    if (so->so_type == IPPROTO_IP && len > 0) {
+        if (len >= (int)sizeof(struct ip)) {
             struct ip *inner_ip = mtod(m, struct ip *);
             int inner_hlen = inner_ip->ip_hl << 2;
             if (inner_hlen > len) {
                 len = -1;
-                errno = -EINVAL;
+                errno = EINVAL;
             } else {
                 len -= inner_hlen;
                 memmove(icp, (unsigned char *)icp + inner_hlen, len);
             }
         } else {
             len = -1;
-            errno = -EINVAL;
+            errno = EINVAL;
         }
     }
 

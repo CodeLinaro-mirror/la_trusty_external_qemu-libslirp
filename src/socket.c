@@ -568,6 +568,14 @@ void sorecvfrom(struct socket *so)
 
         len = recvfrom(so->s, buff, 256, 0, (struct sockaddr *)&addr, &addrlen);
         /* XXX Check if reply is "correct"? */
+        if (len == -1 && slirp_recv_would_block(errno)) {
+            /*
+             * Spurious wakeup, no reply yet. Keep the socket for the real
+             * reply instead of udp_detach()ing it; so_expire (set by
+             * udp_attach()) reclaims it like any unanswered ping.
+             */
+            return;
+        }
 
         if (len == -1 || len == 0) {
             uint8_t code = ICMP_UNREACH_PORT;
@@ -590,6 +598,14 @@ void sorecvfrom(struct socket *so)
 
         len = recvfrom(so->s, buff, 256, 0, (struct sockaddr *)&addr, &addrlen);
         /* XXX Check if reply is "correct"? */
+        if (len == -1 && slirp_recv_would_block(errno)) {
+            /*
+             * Spurious wakeup, no reply yet. Keep the socket for the real
+             * reply instead of udp_detach()ing it; so_expire (set by
+             * udp_attach()) reclaims it like any unanswered ping.
+             */
+            return;
+        }
 
         if (len == -1 || len == 0) {
             uint8_t code = ICMP6_UNREACH_PORT;
@@ -656,6 +672,10 @@ void sorecvfrom(struct socket *so)
         DEBUG_MISC(" did recvfrom %d, errno = %d-%s", m->m_len, errno,
                    strerror(errno));
         if (m->m_len < 0) {
+            if (slirp_recv_would_block(errno)) {
+                m_free(m);
+                return;
+            }
             if (errno == ENOTCONN) {
                 /*
                  * UDP socket got burnt, e.g. by suspend on iOS. Tear it down
@@ -781,8 +801,12 @@ int sosendto(struct socket *so, struct mbuf *m)
     /* Don't care what port we get */
     ret = sendto(so->s, m->m_data, m->m_len, 0, (struct sockaddr *)&addr,
                  sockaddr_size(&addr));
-    if (ret < 0)
-        return -1;
+    if (ret < 0) {
+        if (!slirp_send_would_block(errno)) {
+            return -1;
+        }
+        DEBUG_MISC(" sendto would block, dropping datagram");
+    }
 
     /*
      * Kill the socket if there's no reply in 4 minutes,
@@ -841,8 +865,12 @@ int sosendtoudp6(struct socket *so, struct mbuf *m, struct gfwd_list *head)
     /* Don't care what port we get */
     ret = sendto(so->s, m->m_data, m->m_len, 0, (struct sockaddr *)&addr,
                  sockaddr_size(&addr));
-    if (ret < 0)
-        return -1;
+    if (ret < 0) {
+        if (!slirp_send_would_block(errno)) {
+            return -1;
+        }
+        DEBUG_MISC(" sendto would block, dropping datagram");
+    }
 
     /*
      * Kill the socket if there's no reply in 4 minutes,

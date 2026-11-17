@@ -313,6 +313,7 @@ slirp_os_socket udp_attach(struct socket *so, unsigned short af)
             so->s = SLIRP_INVALID_SOCKET;
             return SLIRP_INVALID_SOCKET;
         }
+        slirp_set_nonblock(so->s);
 
 #ifdef __linux__
         {
@@ -354,9 +355,13 @@ slirp_os_socket udp_reattach(struct socket *so, unsigned short af)
                 return so->s; /* Already correct family */
             }
         }
+        slirp_unregister_poll_socket(so);
         closesocket(so->s);
     }
     so->s = slirp_socket(af, SOCK_DGRAM, 0);
+    if (have_valid_socket(so->s)) {
+        slirp_set_nonblock(so->s);
+    }
     slirp_register_poll_socket(so);
     return so->s;
 }
@@ -398,6 +403,7 @@ struct socket *udpx_listen(Slirp *slirp,
         errno = save_errno;
         return NULL;
     }
+    slirp_set_nonblock(so->s);
     if (haddr->sa_family == AF_INET6)
         slirp_socket_set_v6only(so->s, (flags & SS_HOSTFWD_V6ONLY) != 0);
     so->so_expire = curtime + SO_EXPIRE;
